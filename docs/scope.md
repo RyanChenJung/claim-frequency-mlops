@@ -119,9 +119,9 @@ Each role is a distinct engineering contribution, which the rubric requires each
 | Role | Scope | Owner |
 |---|---|---|
 | A. Data | OpenML ingestion, cleaning, split, DVC pipeline and DagsHub remote, data schema, datasheet, drift datasets | @lx977 |
-| B. Modeling | Baseline, GLM, LightGBM, FLAML, metrics, MLflow tracking, registry, semver, `promote` | TBD |
+| B. Modeling | Baseline, GLM, LightGBM, FLAML, metrics, MLflow tracking, registry, semver, `promote` | @MarSmallK |
 | C. Platform | `docker compose` (Postgres, MLflow, Airflow), DockerOperator DAGs, CI, README run instructions, integration and the demo machine | @RyanChenJung |
-| D. Serving and monitoring | FastAPI, Pydantic validation, prediction log, Evidently, dashboard, alerts | TBD |
+| D. Serving and monitoring | FastAPI, Pydantic validation, prediction log, Evidently, dashboard, alerts | @cyq01 |
 
 Team members: @RyanChenJung, @MarSmallK, @lx977, @cyq01.
 
