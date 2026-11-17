@@ -41,7 +41,7 @@ The stages map to the syllabus Technical Project Outline.
 | Syllabus stage | What we build |
 |---|---|
 | 1. Data ingestion and baselines | DVC stages `ingest → clean → split → drift sets`, with DagsHub as the shared remote ([ADR-0004](adr/0004-dvc-with-dagshub-remote.md)); the constant baseline |
-| 2a. Orchestration | Airflow 3 with `LocalExecutor`. Each task runs the `trainer` image via DockerOperator ([ADR-0003](adr/0003-airflow-with-docker-operator.md)). DAGs: `training` (`dvc repro` → train → evaluate → register) and `monitor` |
+| 2a. Orchestration | Airflow 3 with `LocalExecutor`. Each task runs the `trainer` image via DockerOperator ([ADR-0003](adr/0003-airflow-with-docker-operator.md)). DAGs: `training` (`dvc repro` → `train`, which also scores every candidate on validation → `register`) and `monitor` |
 | 2b. Experiment tracking | MLflow. Candidates: constant baseline, Poisson GLM, LightGBM (Poisson), and FLAML AutoML over LightGBM / XGBoost / HistGB with a forced Poisson objective ([ADR-0006](adr/0006-flaml-for-automl.md)). Each AutoML trial is a nested run. Every run records the git commit and the DVC data hash (lineage) |
 | 2c. Model registry | Semantic version tag on every model version; `challenger` and `champion` aliases; promotion is a human `promote` command ([ADR-0007](adr/0007-semver-and-human-promotion.md)) |
 | 3. Containerization and deployment | FastAPI `api` image that loads `models:/claim-frequency@champion` at startup |
@@ -73,7 +73,7 @@ There is one `docker compose` stack:
 
 - `POST /predict` takes one or more policies with raw rating factors and returns the predicted annual frequency per policy plus the model's semantic version.
 - Pydantic validates types and plausible ranges (for example `DrivAge` 18–100). Invalid requests get HTTP 422.
-- `GET /health` reports liveness for Docker health checks. `GET /model-info` reports the served version, its training date, and its metrics.
+- `GET /health` reports readiness: HTTP 200 once the champion is loaded, 503 before, so Docker health checks and `send-traffic` can wait for it. `GET /model-info` reports the served version, its training date, and its metrics.
 - Every request and prediction is written to `prediction_log` in Postgres.
 - Switching models means moving the `champion` alias and restarting the `api` container. It needs no code change and no image rebuild.
 
@@ -88,13 +88,13 @@ There is one `docker compose` stack:
 
 ## Drift scenarios
 
-`simulate_drift.py --scenario <name>` corrupts the test set. Each output is versioned with DVC.
+`claimfreq make-drift`, a single DVC stage, writes one corrupted copy of the test set per scenario. Each output is versioned with DVC; the exact file formats are pinned in [`docs/contracts.md`](contracts.md).
 
 | Scenario | Corruption | Expected detection |
 |---|---|---|
 | `schema_break` | Rename a column or send a wrong type | API returns 422; monitoring shows a spike in the rejection rate |
 | `out_of_bounds` | Impossible values (e.g. `DrivAge = 250`, negative `BonusMalus`) | API validation rejects the requests |
-| `column_swap` | Swap `VehAge` and `VehPower`. Values stay plausible, so validation passes | Only Evidently's distribution checks catch it: a silent failure |
+| `column_swap` | Swap `VehAge` and `VehPower` on the policies where each value is valid in the other column (`VehAge` 4–15). Values stay plausible, so validation passes | Only Evidently's distribution checks catch it: a silent failure |
 | `portfolio_shift` | Resample toward young, urban drivers (lower `DrivAge`, higher `Density`) | Data drift, and the mean predicted frequency rises |
 | `concept_drift` | Same feature distribution, higher true claim rate | Data drift tests pass; the calibration ratio fails. Shows why data drift alone is not enough |
 

@@ -21,4 +21,4 @@ Every new best model is registered with the alias `challenger`. The register ste
 
 ## Consequences
 
-- Retraining is triggered manually, with a data-version parameter. An automatic trigger from the `monitor` DAG is a stretch goal, and even then promotion stays manual.
+- Retraining is triggered manually. The training DAG trains on whatever data version the checked-out `dvc.lock` points to; to retrain on another data version, check out that git revision and trigger the DAG. An automatic trigger from the `monitor` DAG is a stretch goal, and even then promotion stays manual.
