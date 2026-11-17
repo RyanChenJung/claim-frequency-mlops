@@ -4,7 +4,11 @@ End-to-end MLOps pipeline that predicts the expected number of motor insurance c
 
 Final project for **ADSP 32021 Machine Learning Operations and Inference Engineering** (University of Chicago, Autumn 2026), Group 2.
 
-> **Status:** scoping in progress. Architecture, setup, and run instructions will be added as the pipeline is built.
+> **Status:** scope agreed; implementation starting. Setup and run instructions will be added as the pipeline is built.
+>
+> - [Project scope](docs/scope.md): what we build, what we don't, roles, and timeline
+> - [Architecture decision records](docs/adr/): why each major choice was made
+> - [Glossary](GLOSSARY.md): shared insurance and MLOps vocabulary
 
 ## Problem
 
@@ -19,9 +23,10 @@ Predict annual claim frequency (`ClaimNb / Exposure`) from driver, vehicle, and 
 
 | Concern | Tool |
 |---|---|
-| Orchestration | Apache Airflow |
-| Data versioning | DVC |
+| Orchestration | Apache Airflow (DockerOperator) |
+| Data versioning | DVC, with a DagsHub remote |
 | Experiment tracking and model registry | MLflow |
+| AutoML | FLAML |
 | Serving | FastAPI in Docker |
 | Monitoring | Evidently |
 
