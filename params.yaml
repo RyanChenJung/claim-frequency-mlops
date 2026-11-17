@@ -1,0 +1,34 @@
+# Pipeline parameters, read by `claimfreq` commands (src/claimfreq/contracts/params.py) and
+# tracked by DVC as stage params. Every key is set explicitly here.
+#
+# Ownership (docs/contracts.md, Params): a role may add or change keys in its own section in
+# its own PR, updating params.py, this file, and the docs table together. The top-level `seed`
+# and any key read by more than one role are contract changes (`contract-change` PR).
+
+seed: 42                    # data seed: used only by split and make-drift
+
+# Role A (Data). Role A adds its own `drift:` section later.
+split:
+  test_fraction: 0.2        # fraction of the full dataset
+  validation_fraction: 0.1  # fraction of the full dataset; train gets the remaining 0.7
+clean:
+  claim_nb_cap: 4           # ClaimNb above this is clipped
+  exposure_cap: 1.0         # Exposure above this (years) is clipped
+
+# Role B (Modeling)
+training:
+  selection_metric: poisson_deviance  # one of: poisson_deviance, gini, calibration_ratio
+  flaml_time_budget_s: 300
+  seed: 42                  # model seed, separate from the data seed
+
+# Role D (Serving and monitoring)
+traffic:
+  batch_size: 100           # policies per POST /predict; at most 1000
+monitor:
+  min_predictions: 200      # fewest predictions in the window for the drift checks to run
+  drift_share_max: 0.2      # fail when the share of drifted rating factors is >= this value
+  fail_on_prediction_drift: true  # drift on predicted_frequency fails the check
+  calibration_min: 0.9      # live calibration ratio must stay within [min, max]
+  calibration_max: 1.1
+  live_deviance_max_ratio: 1.2    # fail when live / reference Poisson deviance exceeds this
+  rejection_rate_max: 0.05  # maximum share of requests rejected with HTTP 422
