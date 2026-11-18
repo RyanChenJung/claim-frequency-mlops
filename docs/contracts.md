@@ -27,8 +27,8 @@ They are recorded in [scope.md](scope.md) and the ADRs, which PR #1 adds. Domain
 | Data paths and drift scenarios | [`paths.py`](../src/claimfreq/contracts/paths.py) | P | C | C | C |
 | Model (registry, tags, metric keys, I/O) | [`model.py`](../src/claimfreq/contracts/model.py) | — | P | — | C |
 | Shared metrics | [`metrics.py`](../src/claimfreq/metrics.py) | — | C | — | C |
-| API bodies and paths | [`api.py`](../src/claimfreq/contracts/api.py) | — | — | C | P |
-| Monitoring log tables | [`logs.py`](../src/claimfreq/contracts/logs.py) | — | — | C | P and C |
+| API bodies and paths | [`api.py`](../src/claimfreq/contracts/api.py) | C (`send-traffic`) | — | C | P |
+| Monitoring log tables | [`logs.py`](../src/claimfreq/contracts/logs.py) | P (`ground_truth`, via `send-traffic`) | — | C | P and C |
 | Params (`params.yaml`) | [`params.py`](../src/claimfreq/contracts/params.py) | P and C | P and C | — | P and C |
 | Environment variables | [`env.py`](../src/claimfreq/contracts/env.py) | C | C | P | C |
 | CLI commands and exit codes | [`cli.py`](../src/claimfreq/cli.py) | P | P | C | P |
@@ -248,7 +248,7 @@ Every command exists with its final name and arguments. Only `fake-data` works t
 | `register` | B | best child run of the latest `train` parent run by `selection_metric` ([candidate scope](#model--modelpy)) → model version with tags, alias `challenger`, reference dataset, comparison with `champion` | Airflow task |
 | `promote --version N` | B | moves alias `champion` | a human |
 | `evaluate-test` | B | champion on `splits/test` → `test_*` metrics | a human, after `promote` |
-| `send-traffic --source {test,<scenario>} [--batch-id ID]` | D | posts to the API in batches of `traffic.batch_size`, then writes `ground_truth` for the scored rows | a developer (see [Runtime](#runtime)) |
+| `send-traffic --source {test,<scenario>} [--batch-id ID]` | A | posts to the API in batches of `traffic.batch_size`, then writes `ground_truth` for the scored rows | a developer (see [Runtime](#runtime)) |
 | `monitor [--since ISO] [--until ISO] [--batch-id ID]` | D | `prediction_log` + `ground_truth` + `rejected_request_log` vs the reference dataset → Evidently UI; posts to `ALERT_WEBHOOK_URL` if set | Airflow task |
 | `fake-data --rows N [--seed S] [--id-start ID] [--out PATH]` | contracts | synthetic clean policies, `IDpol` from `--id-start` (default 1) to `--id-start + --rows - 1`, which must not exceed `api.MAX_POLICY_ID` (exit 2) → `DATA_DIR/fake/policies.parquet` by default | works now |
 
@@ -319,7 +319,7 @@ Every command exists with its final name and arguments. Only `fake-data` works t
   - The trainer image installs `git` and runs `git config --system --add safe.directory '*'`, so `git rev-parse HEAD` works on the bind-mounted repo, which another user owns. DAG tasks therefore do not pass `GIT_COMMIT`; it stays an override.
   - CI builds whichever Dockerfiles exist.
 - **Which code runs in the trainer container.** The trainer image installs the project in editable mode (uv's default) from `WORKDIR /repo`. Every DockerOperator task and the compose `trainer` service bind-mount the host repo root at `/repo` as the working directory, so the code, `params.yaml`, `dvc.lock`, and `.git` all come from the checked-out revision. Rebuild the image only when dependencies change. The `api` image is self-contained: it copies the source at build time and uses no bind mount.
-- **Compose services.** Role C writes every compose service: `postgres`, `mlflow` (published 5001→5000), the Airflow services, `trainer`, `api` (built from `docker/api.Dockerfile`, published 8000→8000, healthcheck on `/health`), and `evidently-ui` (published 8001→8000). Role D owns `docker/api.Dockerfile` and the Evidently project that `monitor` pushes to.
+- **Compose services.** Role C writes the compose services `postgres`, `mlflow` (published 5001→5000), the Airflow services, `trainer`, and `api` (built from `docker/api.Dockerfile`, published 8000→8000, healthcheck on `/health`). Role D writes the `evidently-ui` service (published 8001→8000, its image version equal to `evidently` in `uv.lock`), and Role C reviews it. Role D also owns `docker/api.Dockerfile` and the Evidently project that `monitor` pushes to.
 - Airflow and its docker provider live only in the Airflow image, outside this `pyproject.toml` ([ADR-0003](adr/0003-airflow-with-docker-operator.md)).
 - **API entry point** and the `create_app` factory: see "The app" under [API](#api--apipy).
 
@@ -344,7 +344,13 @@ When you implement a command, remove its entries from `STUBS` in [`tests/test_cl
 
 Then, per role:
 
-- **A. Data.** Implement `ingest` first. Download OpenML 41214, strip the quotes from `VehGas`, and select columns by name. Then run `validate_frame(df, "raw")` on the frame as read (its float `IDpol` and `ClaimNb` pass, being whole numbers) and `coerce_frame` before writing `raw/freMTPL2freq.parquet`. Continue with `clean`, `split`, and `make-drift`; the fake policies show what a valid clean frame looks like. `make_policies` produces clean-stage frames only, so A owns any raw-stage fake it needs for testing ingest. A also owns the future `drift:` section of `params.yaml`.
+- **A. Data.** Implement `ingest` first. Download OpenML 41214, strip the quotes from `VehGas`, and select columns by name. Then run `validate_frame(df, "raw")` on the frame as read (its float `IDpol` and `ClaimNb` pass, being whole numbers) and `coerce_frame` before writing `raw/freMTPL2freq.parquet`. Continue with `clean`, `split`, and `make-drift`; the fake policies show what a valid clean frame looks like. `make_policies` produces clean-stage frames only, so A owns any raw-stage fake it needs for testing ingest. A also owns the future `drift:` section of `params.yaml`. Last, implement `send-traffic`, which replays your test and drift files through Role D's API; test it against a stub HTTP server until Role D's app lands:
+
+  ```bash
+  uv run claimfreq fake-data --rows 10000 --seed 3 --id-start 900000 --out data/fake/splits/test.parquet
+  DATA_DIR=data/fake uv run claimfreq send-traffic --source test   # stub for now: exits 3
+  ```
+
 - **B. Modeling.** Implement `train` first, against fake splits under a git-ignored data directory:
 
   ```bash
@@ -363,12 +369,7 @@ Then, per role:
   ```
 
   It proves the mounts (the file appears under `data/fake/` in the repo on the host), that `MONITORING_DB_URL` reached the container (the assertion fails if it fell back to the SQLite default; SQLAlchemy masks the password in the message), and that Postgres is reachable. A stub's exit code 3 reaches a DAG task only when the task runs the command directly (`train`, `register`, `monitor`); under `dvc repro`, a stub stage shows as DVC's own failure. The `dvc repro` task also needs Role A's DVC setup before it can run ([DAGs](#dags)).
-- **D. Serving and monitoring.** Start with the FastAPI app. Build it with `create_app(model=TrueFrequencyModel())`, validate with `PredictRequest`, build the model input with `coerce_features`, and log with `prediction_log_rows` to the default SQLite `MONITORING_DB_URL`. Then implement `send-traffic` and `monitor` (compare the logs with `make_reference_frame`). Use at least 10,000 fake policies per window: on fewer, the calibration check is dominated by noise and raises false alarms even on clean traffic.
-
-  ```bash
-  uv run claimfreq fake-data --rows 10000 --seed 3 --id-start 900000 --out data/fake/splits/test.parquet
-  DATA_DIR=data/fake uv run claimfreq send-traffic --source test   # stub for now: exits 3
-  ```
+- **D. Serving and monitoring.** Start with the FastAPI app. Build it with `create_app(model=TrueFrequencyModel())`, validate with `PredictRequest`, build the model input with `coerce_features`, and log with `prediction_log_rows` to the default SQLite `MONITORING_DB_URL`. Then implement `monitor` (compare the logs with `make_reference_frame`). Use at least 10,000 fake policies per window: on fewer, the calibration check is dominated by noise and raises false alarms even on clean traffic. To feed the API before Role A's `send-traffic` lands, post `make_predict_request` bodies from a test.
 
 ## Changing a contract
 
