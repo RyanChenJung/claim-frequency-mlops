@@ -288,7 +288,7 @@ Every command exists with its final name and arguments. Only `fake-data` works t
 
 ## DAGs
 
-Airflow 3.4.0 (`apache/airflow:3.4.0-python3.12`, which ships the docker provider) runs in compose with `LocalExecutor`: `airflow-init` (migrates the `airflow` database, then exits), `airflow-apiserver`, `airflow-scheduler`, and `airflow-dag-processor`. The UI is at <http://localhost:8080>, published on 127.0.0.1 only, without login (`SimpleAuthManager`, all users admin). DAGs start paused.
+Airflow 3.4.0 (`apache/airflow:3.4.0-python3.12`, which ships the docker provider) runs in compose with `LocalExecutor`: `airflow-init` (checks the Airflow keys, migrates the `airflow` database, then exits), `airflow-apiserver`, `airflow-scheduler`, and `airflow-dag-processor`. They are in the `airflow` profile and run only on the demo machine: `docker compose --profile airflow up -d`. A plain `docker compose up -d` starts only `postgres` and `mlflow`, so teammates need no Airflow keys. The UI is at <http://localhost:8080>, published on 127.0.0.1 only, without login (`SimpleAuthManager`, all users admin). DAGs start paused.
 
 - **Files.** [`dags/training.py`](../dags/training.py) and [`dags/monitor.py`](../dags/monitor.py) define the DAGs. [`dags/claimfreq_tasks.py`](../dags/claimfreq_tasks.py) is the one DockerOperator factory, and [`dags/monitor_window.py`](../dags/monitor_window.py) holds the window rules (standard library only, tested by pytest).
 - **Every task** runs `claimfreq-trainer:latest` on the `claim-frequency-mlops_default` network, bind-mounts `HOST_REPO_DIR` at `/repo` as the working directory, and has `retries=0`.

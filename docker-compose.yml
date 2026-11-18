@@ -2,9 +2,13 @@
 # Images, Runtime, DAGs) lists every service and the values its clients use.
 #
 #   cp .env.example .env              # then fill in the required values
-#   docker compose --profile tools build trainer   # the image every Airflow task runs
-#   docker compose up -d
+#   docker compose up -d              # postgres and mlflow: enough for development
 #   open http://localhost:5001        # MLflow UI (5000 is macOS AirPlay)
+#
+# Airflow runs only on the demo machine, in the "airflow" profile (it also needs the Airflow
+# keys in .env):
+#   docker compose --profile tools build trainer   # the image every Airflow task runs
+#   docker compose --profile airflow up -d
 #   open http://localhost:8080        # Airflow UI (local only, no login)
 #
 # The fixed project name gives a predictable network, claim-frequency-mlops_default, which
@@ -12,16 +16,20 @@
 name: claim-frequency-mlops
 
 # Shared by every Airflow service (ADR-0003): the official image, which already ships the
-# docker provider, with LocalExecutor and no Redis, Celery, or triggerer.
+# docker provider, with LocalExecutor and no Redis, Celery, or triggerer. The "airflow"
+# profile keeps a plain `docker compose up` (and teammates without the Airflow keys) from
+# starting it. The keys default to empty here, because compose interpolates every service
+# even when its profile is off; airflow-init checks them instead.
 x-airflow-common: &airflow-common
+  profiles: ["airflow"]
   image: apache/airflow:3.4.0-python3.12
   user: "${AIRFLOW_UID:-50000}:0"
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
-    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?set AIRFLOW_FERNET_KEY in .env}
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
     # Every Airflow component must share the JWT secret of the execution API.
-    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?set AIRFLOW_JWT_SECRET in .env}
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-}
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
     # Local demo only: the UI is published on 127.0.0.1 and nobody has to log in.
     AIRFLOW__CORE__AUTH_MANAGER: airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager
@@ -31,7 +39,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     # Read by the DAG files (dags/claimfreq_tasks.py) to configure the DockerOperator tasks.
-    HOST_REPO_DIR: ${HOST_REPO_DIR:?set HOST_REPO_DIR in .env}
+    HOST_REPO_DIR: ${HOST_REPO_DIR:-}
     TRAINER_IMAGE: claimfreq-trainer:latest
     COMPOSE_NETWORK: claim-frequency-mlops_default
     POSTGRES_USER: ${POSTGRES_USER}
@@ -119,10 +127,19 @@ services:
       postgres:
         condition: service_healthy
 
-  # One-shot: creates or upgrades the Airflow metadata database, then exits.
+  # One-shot: checks the Airflow keys, creates or upgrades the metadata database, then exits.
+  # The other Airflow services start only after it succeeds.
   airflow-init:
     <<: *airflow-common
-    command: db migrate
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        if [ -z "$${AIRFLOW__CORE__FERNET_KEY}" ] || [ -z "$${AIRFLOW__API_AUTH__JWT_SECRET}" ] || [ -z "$${HOST_REPO_DIR}" ]; then
+          echo "Set AIRFLOW_FERNET_KEY, AIRFLOW_JWT_SECRET, and HOST_REPO_DIR in .env (see .env.example)." >&2
+          exit 1
+        fi
+        exec /entrypoint airflow db migrate
     restart: "no"
 
   airflow-apiserver:
