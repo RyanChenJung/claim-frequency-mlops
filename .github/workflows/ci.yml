@@ -24,8 +24,9 @@ jobs:
       - uses: actions/checkout@v7
 
       # Installs the uv version allowed by `required-version` in pyproject.toml; uv then
-      # installs Python 3.12 itself (.python-version).
-      - uses: astral-sh/setup-uv@v10
+      # installs Python 3.12 itself (.python-version). setup-uv publishes only full version
+      # tags (no moving `v10`), so it is pinned exactly.
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
 
