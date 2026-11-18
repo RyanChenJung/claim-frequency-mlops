@@ -29,7 +29,6 @@ STUBS = [
     (["clean"], "Role A"),
     (["split"], "Role A"),
     (["make-drift"], "Role A"),
-    (["train"], "Role B"),
     (["register"], "Role B"),
     (["promote", "--version", "2"], "Role B"),
     (["evaluate-test"], "Role B"),

@@ -92,6 +92,16 @@ def _fake_data(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _train(args: argparse.Namespace) -> int:
+    """Train every candidate and log one parent MLflow run with a child run per candidate."""
+    # Imported here so `--help` and the stubs stay fast and need no mlflow.
+    from claimfreq.training import train
+
+    parent_run_id = train()
+    print(f"train: logged candidate set {parent_run_id}")
+    return EXIT_OK
+
+
 # argparse types raise ArgumentTypeError: for any other error, argparse would print the
 # function's name ("invalid _positive_int value") instead of the message.
 
@@ -190,7 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
         "train",
         "Train candidates on splits/train, evaluate on splits/validation, and log each as a "
         "child run of one parent MLflow run per invocation.",
-        _not_implemented(ROLE_MODELING),
+        _train,
     )
     add(
         "register",
