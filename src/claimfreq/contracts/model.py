@@ -13,12 +13,16 @@ Producers and consumers:
 Training convention (ADR-0002): the target is claim frequency ``y = ClaimNb / Exposure`` with
 ``sample_weight = Exposure``, on clean-stage frames.
 
-Model artifact format (what ``register`` logs and the API loads):
+Model artifact format (what ``train`` logs, ``register`` registers, and the API loads):
 
 - The champion is a scikit-learn ``Pipeline`` with all preprocessing (for example categorical
   encoding) inside it, so it takes the raw rating factors.
-- It is logged with ``mlflow.sklearn`` using skops serialization, and its
-  ``skops_trusted_types`` are listed at log time.
+- ``train`` logs every candidate's fitted Pipeline in its own child run, at
+  ``MODEL_ARTIFACT_PATH``, with ``mlflow.sklearn`` using skops serialization; its
+  ``skops_trusted_types`` are listed at log time. ``train`` and ``register`` run in separate
+  containers, so ``register`` registers ``runs:/<best child run id>/model`` instead of refitting.
+- The logged model has an MLflow signature inferred from the validation features, so pyfunc
+  enforces the input schema (column names and dtypes of ``FEATURE_COLUMNS``).
 - It is loaded with ``mlflow.pyfunc.load_model("models:/claim-frequency@champion")``.
 - Its runtime libraries are a subset of {scikit-learn, lightgbm, xgboost}, which is why the
   ``api`` dependency group carries all three.
@@ -46,6 +50,9 @@ ALIAS_CHALLENGER = "challenger"  # set by `register` on every new best model
 
 # --- Tags ---------------------------------------------------------------------------------------
 
+# Run id of the `train` parent run, on the parent and on each of its child runs. `register` scopes
+# its search to one candidate set (docs/contracts.md, Model: candidate scope).
+TAG_CANDIDATE_SET = "candidate_set"
 # Value of claimfreq.contracts.env.git_commit() at training time.
 TAG_GIT_COMMIT = "git_commit"
 # file_md5() of the train split file actually read. It equals the md5 that DVC 3 records for
@@ -128,6 +135,12 @@ class MetricPrefix(StrEnum):
     TEST = "test_"  # final champion evaluation only (`evaluate-test`)
     LIVE = "live_"  # monitoring on logged traffic once ground truth has arrived
 
+
+# --- Model artifact -----------------------------------------------------------------------------
+
+# Artifact path of the fitted Pipeline in each `train` child run; `register` registers
+# runs:/<run id>/MODEL_ARTIFACT_PATH.
+MODEL_ARTIFACT_PATH = "model"
 
 # --- Reference dataset artifact -----------------------------------------------------------------
 

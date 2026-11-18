@@ -2,9 +2,9 @@
 
 The Airflow DAGs (Role C) and DVC stages (Role A) call these commands inside the ``trainer``
 image, so the command line is the only interface they depend on (ADR-0003). Each command
-already exists with its final arguments; only ``fake-data`` works today. The others are stubs
-that exit with ``EXIT_NOT_IMPLEMENTED`` until their owner replaces the stub with a real
-implementation, without changing the command line.
+already exists with its final arguments. Commands not implemented yet are stubs that exit with
+``EXIT_NOT_IMPLEMENTED`` until their owner replaces the stub with a real implementation, without
+changing the command line; ``tests/test_cli.py`` lists the remaining stubs in ``STUBS``.
 
 Exit codes (any nonzero code makes Airflow mark the task failed):
 

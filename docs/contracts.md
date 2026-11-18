@@ -73,10 +73,12 @@ One row is one **policy**. A policy frame has 12 columns, in this canonical orde
 - Registered model `claim-frequency`, in MLflow experiment `claim-frequency`. Aliases: `champion` (served) and `challenger` (newest best model, not yet promoted).
 - **Training convention:** the target is **claim frequency** `y = ClaimNb / Exposure`, with `sample_weight = Exposure`, on clean frames. `split_xy_w(df)` returns `(X, y, w)`.
 - **Input:** a DataFrame with exactly `FEATURE_COLUMNS`, in canonical order and dtypes, without `IDpol` or targets, built with `schema.coerce_features`. **Output:** a 1-D float array, one value > 0 per row, in claims per policy-year. `FrequencyModel` is the protocol.
+- **Signature.** Every logged model carries an MLflow signature inferred from the validation features, so `mlflow.pyfunc` enforces the input schema: the `FEATURE_COLUMNS` names, with `int64` numeric and string categorical columns. A frame built with `coerce_features` always passes it.
 - `ConstantFrequencyModel` is the **baseline model**: it predicts `sum(ClaimNb) / sum(Exposure)` for every policy. Every candidate must beat it.
-- **Artifact format** (what `register` logs and the API loads):
+- **Artifact format** (what `train` logs, `register` registers, and the API loads):
   - The champion is a scikit-learn `Pipeline` with all preprocessing (such as categorical encoding) inside it.
-  - It is logged with `mlflow.sklearn` using skops serialization, and its `skops_trusted_types` are listed at log time.
+  - `train` logs every candidate's fitted Pipeline in its own child run at `MODEL_ARTIFACT_PATH` (`model`), with `mlflow.sklearn` using skops serialization; its `skops_trusted_types` are listed at log time. `train` and `register` run in separate containers, so `register` registers `runs:/<best child run id>/model` rather than refitting or logging the model again.
+  - The model's `requirements.txt` lists only its runtime libraries (scikit-learn, skops, numpy, pandas, pyarrow, plus the `mlflow` pin MLflow adds; lightgbm and xgboost once #16 adds them), not the whole project.
   - It is loaded with `mlflow.pyfunc.load_model("models:/claim-frequency@champion")`.
   - Its runtime libraries are a subset of {scikit-learn, lightgbm, xgboost}. That is why the `api` dependency group carries all three ([Images](#images)).
   - The pyfunc model receives a features-only frame built with `coerce_features`.
@@ -86,8 +88,8 @@ One row is one **policy**. A policy frame has 12 columns, in this canonical orde
 - **Model version tags:** `semver`, `schema_hash`, `data_hash`, `git_commit`, `algorithm` (e.g. `constant`, `poisson_glm`, `lightgbm`, `flaml:lgbm`), `selection_metric`, `selection_metric_value`.
 - **Metric keys** are `<prefix><name>`. Prefixes: `val_` (validation; the only one used for selection), `test_` (final champion evaluation), `live_` (monitoring). Names: `poisson_deviance`, `gini`, `calibration_ratio`.
 - **Selection direction.** `METRIC_GOALS` says which way each metric is better: `poisson_deviance` → minimize, `gini` → maximize, `calibration_ratio` → closest to 1.0. `is_better(metric, candidate, incumbent)` returns True only when the candidate is strictly better; a tie or a NaN is never better. It returns a Python `bool`, also for numpy inputs. Role B's `register` uses it.
-- **Candidate scope** (for Roles B and C). `train` creates one parent MLflow run per invocation, tagged `candidate_set=<parent run id>`, and one child run per candidate. `register` considers only the children of the most recent `train` parent run (by start time). Everything else about `register` is Role B's.
-- **Reference dataset:** `register` logs it on the model's run at `reference/reference.parquet`, with `REFERENCE_COLUMNS` (`FEATURE_COLUMNS` + `ClaimNb` + `Exposure` + `predicted_frequency`) built from the validation split. The monitor loads it from the champion.
+- **Candidate scope** (for Roles B and C). `train` creates one parent MLflow run per invocation and one child run per candidate. The parent and every child are tagged `candidate_set=<parent run id>` (`TAG_CANDIDATE_SET`), so a search on that tag alone also returns children; a parent has no `mlflow.parentRunId` tag. `register` considers only the children of the most recent `train` parent run (by start time) whose status is `FINISHED`: if a candidate crashes, its parent ends `FAILED` and that candidate set is skipped. Everything else about `register` is Role B's.
+- **Reference dataset:** `register` logs it on the model's run (the `train` child run of the registered version) at `reference/reference.parquet`, with `REFERENCE_COLUMNS` (`FEATURE_COLUMNS` + `ClaimNb` + `Exposure` + `predicted_frequency`) built from the validation split. The monitor loads it from the champion.
 
 ### Shared metrics — [`metrics.py`](../src/claimfreq/metrics.py)
 
@@ -212,7 +214,7 @@ Each scenario must fail a specific check:
 |---|---|---|
 | `seed` (top level) | contract | `seed: 42`, the data seed: used only by `split` and `make-drift` |
 | `split`, `clean` | A | `test_fraction: 0.2`, `validation_fraction: 0.1` (of the full dataset); `claim_nb_cap: 4`, `exposure_cap: 1.0` |
-| `training` | B | `selection_metric: poisson_deviance` (one of the metric names), `flaml_time_budget_s: 300`, `seed: 42` (the model seed) |
+| `training` | B | `selection_metric: poisson_deviance` (one of the metric names), `flaml_time_budget_s: 300`, `seed: 42` (the model seed); `glm:` `alpha: 0.0001`, `max_iter: 1000`, `solver: newton-cholesky` (`lbfgs` or `newton-cholesky`), `drivage_edges: [21, 25, 30, 40, 50, 60, 70]` (left edges of the DrivAge bands after 18; strictly increasing), `vehage_bins: 10` (VehAge quantile bins; at least 2) |
 | `traffic` | D | `batch_size: 100` |
 | `monitor` | D | `min_predictions: 200` (fewest predictions in the window for the data and prediction drift checks to run; at least 1), `drift_share_max: 0.2` (fail when the share of drifted rating factors is ≥ this value, so 2 of 9 ≈ 0.22 fails), `fail_on_prediction_drift: true`, `calibration_min: 0.9`, `calibration_max: 1.1`, `live_deviance_max_ratio: 1.2`, `rejection_rate_max: 0.05` |
 
@@ -237,7 +239,7 @@ Defaults target local development on the host. The compose value is what every c
 
 ### CLI — [`cli.py`](../src/claimfreq/cli.py)
 
-Every command exists with its final name and arguments. Only `fake-data` works today; the others print `not implemented yet — owner: Role X; see docs/contracts.md` and exit 3.
+Every command exists with its final name and arguments. `fake-data` and `train` work today; the others print `not implemented yet — owner: Role X; see docs/contracts.md` and exit 3.
 
 | Command | Owner | Reads → writes | Runs as |
 |---|---|---|---|
@@ -320,7 +322,7 @@ Airflow 3.4.0 (`apache/airflow:3.4.0-python3.12`, which ships the docker provide
 
 ## Images
 
-- **Dependency groups** ([PEP 735](https://peps.python.org/pep-0735/)) in `pyproject.toml`; `trainer` and `api` are empty for now:
+- **Dependency groups** ([PEP 735](https://peps.python.org/pep-0735/)) in `pyproject.toml`. Each role adds its packages to `trainer` and `api` in its own PR (`trainer` already has `mlflow` and `skops` from #14):
   - `dev`: test and lint tools. API test dependencies (for example `httpx`, which FastAPI's `TestClient` needs) go here too.
   - `trainer`: A adds `dvc[s3]`; B adds `mlflow`, `flaml[automl]`, `lightgbm`, `xgboost`, `skops`; D adds `evidently` and an HTTP client.
   - `api`: D adds `fastapi`, `uvicorn`, `mlflow-skinny`, `lightgbm`, `xgboost`, `skops`.
