@@ -230,9 +230,10 @@ Defaults target local development on the host. The compose value is what every c
 | `ALERT_WEBHOOK_URL` | unset | from `.env`, optional | `monitor`; when unset, alerts only go to the log |
 | `GIT_COMMIT` | unset (then `git rev-parse HEAD`) | unset: the trainer image runs `git rev-parse HEAD` on the mounted repo ([Images](#images)); set it only to override | `train`, `register` (the `git_commit` tag) |
 
-- **Postgres.** Role C's Postgres init creates the `airflow`, `mlflow`, and `monitoring` databases.
+- **Postgres.** `postgres:17`. Role C's init script ([`docker/postgres/init-databases.sql`](../docker/postgres/init-databases.sql)) creates the `airflow`, `mlflow`, and `monitoring` databases on the first start of an empty volume. Postgres is reachable only inside the compose network; no host port is published.
 - **Secrets.** `POSTGRES_USER` and `POSTGRES_PASSWORD` come from `.env`, which git ignores. Role C provides a committed `.env.example`.
-- **MLflow artifacts.** The MLflow server runs with artifact serving (`--serve-artifacts`), so clients need no storage credentials.
+- **MLflow artifacts.** The MLflow server runs with artifact serving (`--serve-artifacts`, stored in the `mlflow-artifacts` volume), so clients need no storage credentials. Artifact URIs look like `mlflow-artifacts:/<experiment>/<run>/artifacts`.
+- **MLflow allowed hosts.** MLflow 3 rejects requests whose `Host` header it does not know (HTTP 403, against DNS rebinding). The server allows `mlflow`, `localhost`, and `127.0.0.1` on any port. A client that needs another name must be added to `--allowed-hosts` in `docker-compose.yml`.
 
 ### CLI — [`cli.py`](../src/claimfreq/cli.py)
 
@@ -282,7 +283,7 @@ Every command exists with its final name and arguments. Only `fake-data` works t
 - **`MLFLOW_TRACKING_URI`.** The default is `http://localhost:5001`, because macOS AirPlay Receiver occupies port 5000. Compose publishes 5001→5000, and containers use `http://mlflow:5000`.
 - **MLflow without a server.** For local development, set `MLFLOW_TRACKING_URI=sqlite:///mlflow.db`. Git ignores `mlflow.db`.
 - **`send-traffic` against the compose stack** runs as `docker compose run --rm trainer claimfreq send-traffic ...`, so it is inside the compose network and gets the compose environment.
-- **Version coupling.** The MLflow server image version must equal the `mlflow` client version in `uv.lock`, and the Evidently UI image version must equal the `evidently` version in `uv.lock`.
+- **Version coupling.** The MLflow server image version must equal the `mlflow` client version in `uv.lock`, and the Evidently UI image version must equal the `evidently` version in `uv.lock`. **MLflow is pinned to `3.18.0`**: the server image `ghcr.io/mlflow/mlflow:v3.18.0`, and the clients `mlflow==3.18.0` (`trainer` group) and `mlflow-skinny==3.18.0` (`api` group). Changing it is a contract change: the server and both clients move together.
 - **uv inside Docker.** Dockerfiles must set `UV_PYTHON_PREFERENCE=only-system`, so the image's own Python 3.12 is used. The environment variable overrides `python-preference = "only-managed"` in `pyproject.toml`, which exists for developer machines.
 
 ## DAGs
@@ -313,6 +314,7 @@ Every command exists with its final name and arguments. Only `fake-data` works t
   - `[tool.uv] default-groups = ["dev", "trainer", "api"]`, so a plain `uv sync` on a laptop installs everything. CI uses `uv sync --locked --all-groups` ([Dev setup](#dev-setup)).
   - After a rebase, re-run `uv lock` instead of hand-merging `uv.lock`.
 - **Dockerfiles:**
+  - `docker/mlflow.Dockerfile`, owned by C: the official MLflow image plus the psycopg 3 PostgreSQL driver, which it lacks.
   - `docker/trainer.Dockerfile`, owned by C, installs the base dependencies + `trainer` with `uv sync --locked --no-default-groups --group trainer`.
   - `docker/api.Dockerfile`, owned by D, installs the base dependencies + `api` with `uv sync --locked --no-default-groups --group api`.
   - Both set `UV_PYTHON_PREFERENCE=only-system` ([Runtime](#runtime)) and `UV_PROJECT_ENVIRONMENT=/opt/venv`, so the virtual environment lives outside the bind-mounted repo, and put `/opt/venv/bin` on `PATH`. Every command inside an image is bare `claimfreq <command>`, `python ...`, or `dvc ...`, never `uv run` ([Runtime](#runtime)).
