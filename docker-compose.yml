@@ -1,13 +1,48 @@
 # Local stack (ADR-0008). Role C owns this file; docs/contracts.md (Environment variables,
-# Images, Runtime) lists every service and the values its clients use.
+# Images, Runtime, DAGs) lists every service and the values its clients use.
 #
-#   cp .env.example .env              # then set POSTGRES_PASSWORD
-#   docker compose up -d postgres mlflow
+#   cp .env.example .env              # then fill in the required values
+#   docker compose --profile tools build trainer   # the image every Airflow task runs
+#   docker compose up -d
 #   open http://localhost:5001        # MLflow UI (5000 is macOS AirPlay)
+#   open http://localhost:8080        # Airflow UI (local only, no login)
 #
 # The fixed project name gives a predictable network, claim-frequency-mlops_default, which
-# the Airflow DockerOperator tasks join later.
+# the Airflow DockerOperator tasks join.
 name: claim-frequency-mlops
+
+# Shared by every Airflow service (ADR-0003): the official image, which already ships the
+# docker provider, with LocalExecutor and no Redis, Celery, or triggerer.
+x-airflow-common: &airflow-common
+  image: apache/airflow:3.4.0-python3.12
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?set AIRFLOW_FERNET_KEY in .env}
+    # Every Airflow component must share the JWT secret of the execution API.
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?set AIRFLOW_JWT_SECRET in .env}
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    # Local demo only: the UI is published on 127.0.0.1 and nobody has to log in.
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "True"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    # New DAGs start paused, so stub tasks do not fail every hour before they are implemented.
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    # Read by the DAG files (dags/claimfreq_tasks.py) to configure the DockerOperator tasks.
+    HOST_REPO_DIR: ${HOST_REPO_DIR:?set HOST_REPO_DIR in .env}
+    TRAINER_IMAGE: claimfreq-trainer:latest
+    COMPOSE_NETWORK: claim-frequency-mlops_default
+    POSTGRES_USER: ${POSTGRES_USER}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+  volumes:
+    - ./dags:/opt/airflow/dags:ro
+    - airflow-logs:/opt/airflow/logs
+  depends_on: &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
 
 services:
   postgres:
@@ -62,7 +97,7 @@ services:
   # from starting it. Run a command with:
   #   docker compose run --rm trainer claimfreq <command>
   # The Airflow DockerOperator tasks run the same image (claimfreq-trainer:latest) with the
-  # same mount and variables, set explicitly per task.
+  # same mount and variables, set explicitly per task (dags/claimfreq_tasks.py).
   trainer:
     profiles: ["tools"]
     build:
@@ -84,6 +119,66 @@ services:
       postgres:
         condition: service_healthy
 
+  # One-shot: creates or upgrades the Airflow metadata database, then exits.
+  airflow-init:
+    <<: *airflow-common
+    command: db migrate
+    restart: "no"
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # With LocalExecutor the tasks run here, so only the scheduler gets the Docker socket: its
+  # DockerOperator tasks start sibling trainer containers on the host's Docker daemon.
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    volumes:
+      - ./dags:/opt/airflow/dags:ro
+      - airflow-logs:/opt/airflow/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type DagProcessorJob --hostname \"$${HOSTNAME}\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
 volumes:
   postgres-data:
   mlflow-artifacts:
+  airflow-logs:
