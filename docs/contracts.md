@@ -77,7 +77,7 @@ One row is one **policy**. A policy frame has 12 columns, in this canonical orde
 - `ConstantFrequencyModel` is the **baseline model**: it predicts `sum(ClaimNb) / sum(Exposure)` for every policy. Every candidate must beat it.
 - **Artifact format** (what `train` logs, `register` registers, and the API loads):
   - The champion is a scikit-learn `Pipeline` with all preprocessing (such as categorical encoding) inside it.
-  - `train` logs every candidate's fitted Pipeline in its own child run at `MODEL_ARTIFACT_PATH` (`model`), with `mlflow.sklearn` using skops serialization; its `skops_trusted_types` are listed at log time. `train` and `register` run in separate containers, so `register` registers `runs:/<best child run id>/model` rather than refitting or logging the model again.
+  - `train` logs every candidate's fitted Pipeline with `mlflow.sklearn` using skops serialization, as an MLflow logged model named `MODEL_ARTIFACT_PATH` (`model`) linked to the candidate's child run; its `skops_trusted_types` are listed at log time. `train` and `register` run in separate containers, so `register` registers the best child's logged model (`models:/<model id>`, found in the run's outputs) rather than refitting or logging the model again. The registered version's `run_id` is that child run, which also holds the reference dataset.
   - The model's `requirements.txt` lists only its runtime libraries (scikit-learn, skops, numpy, pandas, pyarrow, plus the `mlflow` pin MLflow adds; lightgbm and xgboost once #16 adds them), not the whole project.
   - It is loaded with `mlflow.pyfunc.load_model("models:/claim-frequency@champion")`.
   - Its runtime libraries are a subset of {scikit-learn, lightgbm, xgboost}. That is why the `api` dependency group carries all three ([Images](#images)).
@@ -230,7 +230,7 @@ Defaults target local development on the host. The compose value is what every c
 | `API_URL` | `http://localhost:8000` | `http://api:8000` | `send-traffic` |
 | `EVIDENTLY_UI_URL` | `http://localhost:8001` | `http://evidently-ui:8000` | `monitor` |
 | `ALERT_WEBHOOK_URL` | unset | from `.env`, optional | `monitor`; when unset, alerts only go to the log |
-| `GIT_COMMIT` | unset (then `git rev-parse HEAD`) | unset: the trainer image runs `git rev-parse HEAD` on the mounted repo ([Images](#images)); set it only to override | `train`, `register` (the `git_commit` tag) |
+| `GIT_COMMIT` | unset (then `git rev-parse HEAD`) | unset: the trainer image runs `git rev-parse HEAD` on the mounted repo ([Images](#images)); set it only to override | `train` (the `git_commit` tag; `register` copies it from the run) |
 
 - **Postgres.** `postgres:17`. Role C's init script ([`docker/postgres/init-databases.sql`](../docker/postgres/init-databases.sql)) creates the `airflow`, `mlflow`, and `monitoring` databases on the first start of an empty volume. Postgres is reachable only inside the compose network; no host port is published.
 - **Secrets.** `POSTGRES_USER` and `POSTGRES_PASSWORD` come from `.env`, which git ignores. Role C provides a committed `.env.example`.
@@ -239,7 +239,7 @@ Defaults target local development on the host. The compose value is what every c
 
 ### CLI — [`cli.py`](../src/claimfreq/cli.py)
 
-Every command exists with its final name and arguments. `fake-data` and `train` work today; the others print `not implemented yet — owner: Role X; see docs/contracts.md` and exit 3.
+Every command exists with its final name and arguments. `fake-data`, `train`, `register`, and `promote` work today; the others print `not implemented yet — owner: Role X; see docs/contracts.md` and exit 3.
 
 | Command | Owner | Reads → writes | Runs as |
 |---|---|---|---|
@@ -266,6 +266,7 @@ Every command exists with its final name and arguments. `fake-data` and `train` 
 | 10 | check failed (validation or a monitoring test). `main()` turns an uncaught `SchemaError` into 10 and prints its message to stderr, without a traceback |
 
 - **Validation failures.** A command owner may simply let `validate_frame` raise: `main()` reports every violation and exits 10.
+- **Registry checks.** `register` exits 10 when there is nothing valid to register: no `FINISHED` train run, no candidate with a `val_<selection_metric>`, or a train split under `DATA_DIR` whose md5 differs from the run's `data_hash`. It exits 0 without registering anything when the best run is already a registered version. `promote --version N` exits 10 when version N does not exist.
 - **`send-traffic`** exits 0 when every batch got an HTTP response of 200 or 422, and prints the counts. It can wait for `/health` to return 200 before the first batch. It exits 1 on connection errors, or on 5xx (including 503) after retries.
 - **`batch_id`** identifies one `send-traffic` run and is shared by every HTTP request of that run. When `--batch-id` is omitted, the default is `<source>-<UTC timestamp %Y%m%dT%H%M%SZ>`, for example `portfolio_shift-20261201T153000Z`. `send-traffic` and `monitor` reject a `--batch-id` longer than `api.MAX_BATCH_ID_LENGTH` (64) with exit 2.
 - **`monitor`** exits 10 if any check that ran failed, and 0 otherwise; a skipped check never fails it, and a window without data logs a `no data in window` line and exits 0 ([What the monitor must catch](#what-the-monitor-must-catch)). The window is described under [DAGs](#dags).

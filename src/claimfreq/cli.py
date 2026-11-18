@@ -102,6 +102,48 @@ def _train(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _register(args: argparse.Namespace) -> int:
+    """Register the best candidate of the latest train run as challenger; exit 10 if none."""
+    # Imported here so `--help` and the stubs stay fast and need no mlflow.
+    from claimfreq.registry import RegistryCheckError, register
+
+    try:
+        result = register()
+    except RegistryCheckError as error:
+        print(error, file=sys.stderr)
+        return EXIT_CHECK_FAILED
+    if result.already_registered:
+        print(
+            f"register: run {result.run_id} is already version {result.version} "
+            f"({result.semver}); nothing registered"
+        )
+    else:
+        print(
+            f"register: version {result.version} ({result.semver}, {result.algorithm}) "
+            f"is the challenger"
+        )
+    return EXIT_OK
+
+
+def _promote(args: argparse.Namespace) -> int:
+    """Move the champion alias to ``--version``; exit 10 if that version does not exist."""
+    from claimfreq.contracts.model import TAG_SEMVER
+    from claimfreq.registry import RegistryCheckError, promote
+
+    try:
+        target, previous = promote(args.version)
+    except RegistryCheckError as error:
+        print(error, file=sys.stderr)
+        return EXIT_CHECK_FAILED
+    was = f"version {previous.version}" if previous is not None else "no champion"
+    print(
+        f"promote: champion is now version {target.version} "
+        f"({target.tags.get(TAG_SEMVER, 'no semver')}); was {was}. Restart the api container "
+        "to serve it."
+    )
+    return EXIT_OK
+
+
 # argparse types raise ArgumentTypeError: for any other error, argparse would print the
 # function's name ("invalid _positive_int value") instead of the message.
 
@@ -207,12 +249,12 @@ def build_parser() -> argparse.ArgumentParser:
         "Register the best candidate of the latest train run by selection_metric with alias "
         "'challenger', its tags, and the reference dataset, and log its comparison with the "
         "'champion'.",
-        _not_implemented(ROLE_MODELING),
+        _register,
     )
     promote = add(
         "promote",
         "Move the 'champion' alias to a registered model version (a human decision).",
-        _not_implemented(ROLE_MODELING),
+        _promote,
     )
     promote.add_argument(
         "--version", type=_positive_int, required=True, metavar="N", help="registry version"
