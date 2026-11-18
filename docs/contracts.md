@@ -288,7 +288,16 @@ Every command exists with its final name and arguments. Only `fake-data` works t
 
 ## DAGs
 
-- **`training` DAG:** `dvc repro` → `train` → `register`.
+Airflow 3.4.0 (`apache/airflow:3.4.0-python3.12`, which ships the docker provider) runs in compose with `LocalExecutor`: `airflow-init` (checks the Airflow keys, migrates the `airflow` database, then exits), `airflow-apiserver`, `airflow-scheduler`, and `airflow-dag-processor`. They are in the `airflow` profile and run only on the demo machine: `docker compose --profile airflow up -d`. A plain `docker compose up -d` starts only `postgres` and `mlflow`, so teammates need no Airflow keys. The UI is at <http://localhost:8080>, published on 127.0.0.1 only, without login (`SimpleAuthManager`, all users admin). DAGs start paused.
+
+- **Files.** [`dags/training.py`](../dags/training.py) and [`dags/monitor.py`](../dags/monitor.py) define the DAGs. [`dags/claimfreq_tasks.py`](../dags/claimfreq_tasks.py) is the one DockerOperator factory, and [`dags/monitor_window.py`](../dags/monitor_window.py) holds the window rules (standard library only, tested by pytest).
+- **Every task** runs `claimfreq-trainer:latest` on the `claim-frequency-mlops_default` network, bind-mounts `HOST_REPO_DIR` at `/repo` as the working directory, and has `retries=0`.
+  - Each task gets only its own variables: `train` and `register` get `MLFLOW_TRACKING_URI`; `monitor` gets `MLFLOW_TRACKING_URI` and `EVIDENTLY_UI_URL`, plus `MONITORING_DB_URL` and `ALERT_WEBHOOK_URL` through `private_environment`; `dvc_repro` gets none.
+  - `private_environment` values are built at run time from the Airflow containers' environment (filled from `.env`). They never appear in the DAG code, the rendered-template view, or the task logs.
+- **Airflow-only settings in `.env`** (only on the machine that runs the full stack): `HOST_REPO_DIR` (the repo's absolute host path; Docker resolves mount sources on the host), `AIRFLOW_FERNET_KEY`, `AIRFLOW_JWT_SECRET`, and on Linux `AIRFLOW_UID`. `.env.example` shows how to generate them.
+- **Docker socket.** Only `airflow-scheduler` mounts `/var/run/docker.sock`, because with `LocalExecutor` the tasks run there. Docker Desktop's socket is readable by the container's root group. On a Linux host the socket belongs to the `docker` group, so add that group id with `group_add` before running Airflow there.
+- **CI** parses `dags/` in the same Airflow image with [`scripts/validate_dags.py`](../scripts/validate_dags.py). It fails on an import error, on a task list that differs from the lists below, on a task with retries, or on a `monitor` schedule without data intervals.
+- **`training` DAG:** `dvc repro` → `train` → `register`, task ids `dvc_repro`, `train`, `register`. Manual trigger only (`schedule=None`).
   - `train` evaluates the candidates on validation (`val_*` metrics); there is no separate evaluate task.
   - `evaluate-test` is run by a human after `promote`.
   - The DAG has no data-version argument. It trains on whatever `dvc.lock` the mounted repo has checked out. To train on another data version, check out that git revision and trigger the DAG.
@@ -296,8 +305,8 @@ Every command exists with its final name and arguments. Only `fake-data` works t
   - Exit code 3 is visible only for commands a DAG task runs directly (`train`, `register`, `monitor`). Under `dvc repro`, a stub stage appears as DVC's own failure.
   - `make-drift` is one DVC stage that writes all five drift files, so `dvc repro` keeps them up to date too.
   - **Dependency for Role C.** The `dvc repro` task needs Role A's `dvc init`, `dvc.yaml`, and `dvc[s3]` in the `trainer` group. Until then, the training DAG can only be wired, not run.
-- **`monitor` DAG:** one `claimfreq monitor` task.
-  - The schedule is hourly. The DAG can be paused for the demo.
+- **`monitor` DAG:** one `claimfreq monitor` task, task id `monitor`.
+  - The schedule is hourly, with real data intervals (`CronDataIntervalTimetable`): the 02:00 run covers `[01:00, 02:00)`. A plain `@hourly` in Airflow 3 gives zero-length intervals, so every scheduled run would check an empty window and pass silently; `monitor_window.py` raises on such an interval. The DAG can be paused for the demo.
   - Optional run params: `batch_id`, `since`, and `until`.
   - A scheduled run uses `--since {{ data_interval_start }} --until {{ data_interval_end }}`.
   - A manual run uses the `since` and `until` params when given; without them, it covers the last 24 hours. With `batch_id`, it also passes `--batch-id`.
