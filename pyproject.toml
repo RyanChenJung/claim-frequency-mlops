@@ -38,10 +38,13 @@ trainer = []
 api = []
 
 [build-system]
-requires = ["uv_build>=0.11.2,<0.12"]
+requires = ["uv_build>=0.13.9,<0.14"]
 build-backend = "uv_build"
 
 [tool.uv]
+# One uv minor version for the whole team and CI, so nobody rewrites uv.lock in a different
+# format. Upgrade with `uv self update`.
+required-version = ">=0.13.9,<0.14"
 # Only use uv-managed interpreters, so a system or Anaconda Python never leaks into .venv.
 python-preference = "only-managed"
 # A plain `uv sync` on a laptop installs every group. Images install one group only, with
