@@ -7,18 +7,81 @@ Runs inside the Airflow image, as the CI step "Validate Airflow DAGs" does:
       apache/airflow:3.4.0-python3.12 python /scripts/validate_dags.py
 
 The expected task lists mirror docs/contracts.md (DAGs), so a DAG edit that drifts from the
-contract fails CI.
+contract fails CI. It also exercises the drift-triggered retraining decision with stubbed
+Docker and trigger calls, since a live exit 10 needs a real `monitor`.
 """
 
 import sys
+from unittest import mock
 
 from airflow.dag_processing.dagbag import DagBag
 
 DAG_FOLDER = "/opt/airflow/dags"
 EXPECTED_TASKS = {
     "training": ["dvc_repro", "train", "register"],
-    "monitor": ["monitor"],
+    "monitor": ["monitor", "retrain_on_drift", "monitor_failed"],
 }
+EXPECTED_TRIGGER_RULES = {
+    ("monitor", "retrain_on_drift"): "all_failed",
+    ("monitor", "monitor_failed"): "one_failed",
+}
+
+
+class FakeTaskInstance:
+    """Minimal stand-in for the runtime task instance: records and serves one XCom."""
+
+    def __init__(self, pulled=None):
+        self.pushed = {}
+        self.pulled = pulled
+
+    def xcom_push(self, key, value):
+        """Record a pushed value."""
+        self.pushed[key] = value
+
+    def xcom_pull(self, task_ids, key):
+        """Return the canned upstream value."""
+        return self.pulled
+
+
+def check_retrain_wiring(monitor) -> list[str]:
+    """Exercise TrainerOperator and RetrainOnDriftOperator with Docker and triggering stubbed."""
+    from airflow.providers.docker.exceptions import DockerContainerFailedException
+    from airflow.providers.docker.operators.docker import DockerOperator
+    from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
+    from airflow.sdk.exceptions import AirflowSkipException
+
+    problems = []
+    monitor_task = monitor.get_task("monitor")
+    failure = DockerContainerFailedException("Docker container failed: {'StatusCode': 10}")
+    ti = FakeTaskInstance()
+    with mock.patch.object(DockerOperator, "execute", side_effect=failure):
+        try:
+            monitor_task.execute({"ti": ti})
+            problems.append("TrainerOperator swallowed the container failure")
+        except DockerContainerFailedException:
+            pass
+    if ti.pushed.get("exit_code") != 10:
+        problems.append(f"TrainerOperator pushed {ti.pushed}, expected exit_code=10")
+
+    retrain = monitor.get_task("retrain_on_drift")
+    if retrain.trigger_dag_id != "training":
+        problems.append(f"retrain_on_drift triggers {retrain.trigger_dag_id!r}, not 'training'")
+    cases = [(10, True, True), (10, False, False), (3, True, False), (1, True, False)]
+    for exit_code, enabled, expect_trigger in cases:
+        ti = FakeTaskInstance(pulled=exit_code)
+        context = {"ti": ti, "params": {"retrain_on_drift": enabled}}
+        with mock.patch.object(TriggerDagRunOperator, "execute") as trigger:
+            try:
+                retrain.execute(context)
+                triggered = trigger.called
+            except AirflowSkipException:
+                triggered = False
+        if triggered != expect_trigger:
+            problems.append(
+                f"retrain_on_drift with exit {exit_code}, enabled={enabled}: "
+                f"triggered={triggered}, expected {expect_trigger}"
+            )
+    return problems
 
 
 def main() -> int:
@@ -46,6 +109,15 @@ def main() -> int:
     timetable = type(monitor.timetable).__name__ if monitor is not None else None
     if timetable not in (None, "CronDataIntervalTimetable"):
         problems.append(f"monitor uses {timetable}, not a data-interval timetable")
+    if monitor is not None:
+        for (dag_id, task_id), rule in EXPECTED_TRIGGER_RULES.items():
+            trigger_rule = bag.dags[dag_id].get_task(task_id).trigger_rule
+            found_rule = str(getattr(trigger_rule, "value", trigger_rule))
+            if found_rule != rule:
+                problems.append(
+                    f"{dag_id}.{task_id} trigger_rule {found_rule!r}, expected {rule!r}"
+                )
+        problems += check_retrain_wiring(monitor)
     for problem in problems:
         print(problem, file=sys.stderr)
     if not problems:

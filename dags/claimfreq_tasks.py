@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import os
 
+from airflow.providers.docker.exceptions import DockerContainerFailedException
 from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
+from retrain_policy import EXIT_CODE_XCOM_KEY, exit_code_from_message
 from sqlalchemy.engine import URL
 
 TRAINER_IMAGE = os.environ.get("TRAINER_IMAGE", "claimfreq-trainer:latest")
@@ -60,18 +62,37 @@ def monitoring_secrets() -> dict[str, str]:
     }
 
 
+class TrainerOperator(DockerOperator):
+    """DockerOperator that records the container's exit code in XCom before failing.
+
+    Downstream tasks need to tell a failed check (10) from a crash (1) or a stub (3), but
+    DockerOperator only puts the code in its exception message. The task still fails as
+    before; the code is pushed under ``EXIT_CODE_XCOM_KEY`` first.
+    """
+
+    def execute(self, context):
+        """Run the container; on failure, push its exit code, then re-raise."""
+        try:
+            return super().execute(context)
+        except DockerContainerFailedException as error:
+            exit_code = exit_code_from_message(str(error))
+            context["ti"].xcom_push(key=EXIT_CODE_XCOM_KEY, value=exit_code)
+            raise
+
+
 def trainer_task(
     task_id: str,
     command: str,
     environment: dict[str, str] | None = None,
     private_environment: dict[str, str] | None = None,
-) -> DockerOperator:
+) -> TrainerOperator:
     """Return a task that runs ``command`` in the trainer image with the contract's wiring.
 
     A nonzero exit code fails the task: 3 means the command is still a stub, 10 that a check
-    failed, and 1 an unexpected error (docs/contracts.md, CLI). Failed tasks are not retried.
+    failed, and 1 an unexpected error (docs/contracts.md, CLI). Failed tasks are not retried,
+    and the exit code is kept in XCom (``TrainerOperator``).
     """
-    return DockerOperator(
+    return TrainerOperator(
         task_id=task_id,
         image=TRAINER_IMAGE,
         command=command,

@@ -296,7 +296,7 @@ Airflow 3.4.0 (`apache/airflow:3.4.0-python3.12`, which ships the docker provide
   - `private_environment` values are built at run time from the Airflow containers' environment (filled from `.env`). They never appear in the DAG code, the rendered-template view, or the task logs.
 - **Airflow-only settings in `.env`** (only on the machine that runs the full stack): `HOST_REPO_DIR` (the repo's absolute host path; Docker resolves mount sources on the host), `AIRFLOW_FERNET_KEY`, `AIRFLOW_JWT_SECRET`, and on Linux `AIRFLOW_UID`. `.env.example` shows how to generate them.
 - **Docker socket.** Only `airflow-scheduler` mounts `/var/run/docker.sock`, because with `LocalExecutor` the tasks run there. Docker Desktop's socket is readable by the container's root group. On a Linux host the socket belongs to the `docker` group, so add that group id with `group_add` before running Airflow there.
-- **CI** parses `dags/` in the same Airflow image with [`scripts/validate_dags.py`](../scripts/validate_dags.py). It fails on an import error, on a task list that differs from the lists below, on a task with retries, or on a `monitor` schedule without data intervals.
+- **CI** parses `dags/` in the same Airflow image with [`scripts/validate_dags.py`](../scripts/validate_dags.py). It fails on an import error, on a task list that differs from the lists below, on a task with retries, on a `monitor` schedule without data intervals, or on wrong retraining wiring: the trigger rules, and the decision for exit codes 10, 3, and 1, which it exercises with Docker and triggering stubbed.
 - **`training` DAG:** `dvc repro` → `train` → `register`, task ids `dvc_repro`, `train`, `register`. Manual trigger only (`schedule=None`).
   - `train` evaluates the candidates on validation (`val_*` metrics); there is no separate evaluate task.
   - `evaluate-test` is run by a human after `promote`.
@@ -305,12 +305,16 @@ Airflow 3.4.0 (`apache/airflow:3.4.0-python3.12`, which ships the docker provide
   - Exit code 3 is visible only for commands a DAG task runs directly (`train`, `register`, `monitor`). Under `dvc repro`, a stub stage appears as DVC's own failure.
   - `make-drift` is one DVC stage that writes all five drift files, so `dvc repro` keeps them up to date too.
   - **Dependency for Role C.** The `dvc repro` task needs Role A's `dvc init`, `dvc.yaml`, and `dvc[s3]` in the `trainer` group. Until then, the training DAG can only be wired, not run.
-- **`monitor` DAG:** one `claimfreq monitor` task, task id `monitor`.
+- **`monitor` DAG:** `monitor` → `retrain_on_drift` → `monitor_failed`.
+  - `monitor` runs `claimfreq monitor` and records the container's exit code in XCom (`TrainerOperator`).
+  - `retrain_on_drift` runs only when `monitor` failed. It triggers the `training` DAG (run id `drift__<monitor run id>`, conf `{"triggered_by": "monitor", ...}`) only for exit 10 (a failed check) and only when the `retrain_on_drift` param is true, which is the default. A crash (1) or a stub (3) never retrains. Retraining only produces a new challenger: promotion stays manual ([ADR-0007](adr/0007-semver-and-human-promotion.md)). The rule is [`dags/retrain_policy.py`](../dags/retrain_policy.py).
+  - `monitor_failed` fails whenever `monitor` failed, so the DAG run stays red (the alert) even after a successful trigger. When `monitor` passes, it is skipped and the run succeeds.
+  - Limitation: the triggered run trains on the data version the checked-out `dvc.lock` points to. Retraining fixes drift only once that data includes the new traffic (stretch goal "data v2", or a future step that folds `ground_truth` into the training data).
   - The schedule is hourly, with real data intervals (`CronDataIntervalTimetable`): the 02:00 run covers `[01:00, 02:00)`. A plain `@hourly` in Airflow 3 gives zero-length intervals, so every scheduled run would check an empty window and pass silently; `monitor_window.py` raises on such an interval. The DAG can be paused for the demo.
-  - Optional run params: `batch_id`, `since`, and `until`.
+  - Optional run params: `batch_id`, `since`, `until`, and `retrain_on_drift` (boolean, default true).
   - A scheduled run uses `--since {{ data_interval_start }} --until {{ data_interval_end }}`.
   - A manual run uses the `since` and `until` params when given; without them, it covers the last 24 hours. With `batch_id`, it also passes `--batch-id`.
-  - The task has `retries=0`, so a failed check (exit 10) is not retried.
+  - Every task has `retries=0`, so a failed check (exit 10) is not retried and triggers at most one training run.
 - **The `monitor` window** applies to `received_at` in `prediction_log` and `rejected_request_log`. `--since` is inclusive and `--until` exclusive. A naive time is read as UTC. Ground truth is joined by `prediction_id`, whatever its `observed_at`.
 - **`--batch-id ID`** restricts `monitor` to one `send-traffic` run. This is how the demo shows each drift scenario on its own.
 
