@@ -1,0 +1,63 @@
+# Local stack (ADR-0008). Role C owns this file; docs/contracts.md (Environment variables,
+# Images, Runtime) lists every service and the values its clients use.
+#
+#   cp .env.example .env              # then set POSTGRES_PASSWORD
+#   docker compose up -d postgres mlflow
+#   open http://localhost:5001        # MLflow UI (5000 is macOS AirPlay)
+#
+# The fixed project name gives a predictable network, claim-frequency-mlops_default, which
+# the Airflow DockerOperator tasks join later.
+name: claim-frequency-mlops
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+    healthcheck:
+      # -h 127.0.0.1: during first-start initialization Postgres listens on its Unix socket
+      # only, so this turns healthy only after the three databases exist.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d monitoring"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  mlflow:
+    build:
+      # The image copies nothing from the repo, so the build context is only docker/:
+      # .env, .venv, and data never reach the Docker daemon.
+      context: ./docker
+      dockerfile: mlflow.Dockerfile
+    image: claimfreq-mlflow:3.18.0
+    # Artifacts are served by the server itself (--serve-artifacts is the default with
+    # --artifacts-destination), so clients need no storage credentials. --allowed-hosts:
+    # MLflow 3 rejects unknown Host headers; containers call it as http://mlflow:5000 and
+    # the host as http://localhost:5001.
+    command: >
+      mlflow server --host 0.0.0.0 --port 5000
+      --backend-store-uri postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/mlflow
+      --artifacts-destination /mlartifacts
+      --allowed-hosts mlflow,mlflow:*,localhost,localhost:*,127.0.0.1,127.0.0.1:*
+    ports:
+      - "127.0.0.1:5001:5000"
+    volumes:
+      - mlflow-artifacts:/mlartifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  mlflow-artifacts:
