@@ -58,6 +58,32 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # One-shot tool, not a long-running service: the "tools" profile keeps `docker compose up`
+  # from starting it. Run a command with:
+  #   docker compose run --rm trainer claimfreq <command>
+  # The Airflow DockerOperator tasks run the same image (claimfreq-trainer:latest) with the
+  # same mount and variables, set explicitly per task.
+  trainer:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: docker/trainer.Dockerfile
+    image: claimfreq-trainer:latest
+    working_dir: /repo
+    volumes:
+      - .:/repo
+    # Compose values from docs/contracts.md (Environment variables). DATA_DIR and GIT_COMMIT
+    # stay unset: data/ is under the mounted repo, and git reads the commit from .git.
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MONITORING_DB_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/monitoring
+      API_URL: http://api:8000
+      EVIDENTLY_UI_URL: http://evidently-ui:8000
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres-data:
   mlflow-artifacts:

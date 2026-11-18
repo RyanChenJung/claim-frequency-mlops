@@ -1,0 +1,21 @@
+# Keep secrets, local state, and bulky folders out of every Docker build context, so nothing
+# here can be baked into an image layer (and builds stay fast).
+
+# Secrets
+.env
+*.env.local
+.dvc/config.local
+
+# Local environments, caches, and data
+.venv/
+.dvc/cache/
+data/
+*.db
+mlruns/
+mlartifacts/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+
+# Not needed inside images (the trainer gets .git from the bind mount at run time)
+.git/
