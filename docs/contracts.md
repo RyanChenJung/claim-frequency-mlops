@@ -379,7 +379,7 @@ Then, per role:
 
 ## Dev setup
 
-1. Install uv: <https://docs.astral.sh/uv/getting-started/installation/>. uv installs Python 3.12 itself; the project uses only uv-managed interpreters.
+1. Install uv: <https://docs.astral.sh/uv/getting-started/installation/>. The project requires uv 0.13.9 or newer within 0.13 (`required-version` in `pyproject.toml`), so the whole team and CI write `uv.lock` the same way; an older uv stops with an error, and `uv self update` fixes it. uv installs Python 3.12 itself; the project uses only uv-managed interpreters.
 2. From the repository root:
 
    ```bash

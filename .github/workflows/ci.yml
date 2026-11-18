@@ -1,0 +1,61 @@
+# Continuous integration: every pull request and every push to main must pass these checks.
+# Branch protection on main requires the "Lint, test, build" job, so a red run blocks the merge.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the older run obsolete.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # Installs the uv version allowed by `required-version` in pyproject.toml; uv then
+      # installs Python 3.12 itself (.python-version).
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+
+      # --locked fails when uv.lock is out of date with pyproject.toml.
+      - name: Install dependencies (all groups)
+        run: uv sync --locked --all-groups
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Test
+        run: uv run pytest
+
+      # requirements.txt is the pinned dependency file for graders. Re-export it after any
+      # dependency change: uv export --no-dev --no-hashes -o requirements.txt
+      - name: Check requirements.txt is up to date
+        run: |
+          uv export --no-dev --no-hashes -o requirements.txt
+          git diff --exit-code requirements.txt
+
+      # Builds every docker/*.Dockerfile that exists, so new images are checked without
+      # editing this file. Does nothing until the first Dockerfile lands.
+      - name: Build Docker images
+        run: |
+          shopt -s nullglob
+          for dockerfile in docker/*.Dockerfile; do
+            echo "::group::docker build -f $dockerfile ."
+            docker build -f "$dockerfile" .
+            echo "::endgroup::"
+          done
