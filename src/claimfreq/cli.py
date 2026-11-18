@@ -213,13 +213,13 @@ def build_parser() -> argparse.ArgumentParser:
         _not_implemented(ROLE_MODELING),
     )
 
-    # Role D (Serving and monitoring).
+    # Role A (Data) owns send-traffic: it replays Role A's test and drift files through the API.
     send_traffic = add(
         "send-traffic",
         "POST a data source to the API in batches of traffic.batch_size, then write "
         "ground_truth for the scored rows. Exit 0 when every batch got HTTP 200 or 422 (the "
         "counts are printed); exit 1 on connection errors or 5xx after retries.",
-        _not_implemented(ROLE_SERVING),
+        _not_implemented(ROLE_DATA),
     )
     send_traffic.add_argument(
         "--source",
