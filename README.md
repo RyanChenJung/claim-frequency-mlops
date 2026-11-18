@@ -10,6 +10,7 @@ Final project for **ADSP 32021 Machine Learning Operations and Inference Enginee
 > - [Contracts](docs/contracts.md): every handoff between roles, and the [dev setup](docs/contracts.md#dev-setup)
 > - [Architecture decision records](docs/adr/): why each major choice was made
 > - [Glossary](GLOSSARY.md): shared insurance and MLOps vocabulary
+> - [Challenges log](docs/challenges.md): engineering problems we hit and how we fixed them
 
 ## Problem
 
