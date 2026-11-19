@@ -38,7 +38,6 @@ EXIT_NOT_IMPLEMENTED = 3
 EXIT_CHECK_FAILED = 10
 
 ROLE_DATA = "Role A (Data)"
-ROLE_MODELING = "Role B (Modeling)"
 ROLE_SERVING = "Role D (Serving and monitoring)"
 
 Handler = Callable[[argparse.Namespace], int]
@@ -103,7 +102,10 @@ def _train(args: argparse.Namespace) -> int:
 
 
 def _registry_command(action: Callable[[], str]) -> int:
-    """Run a ``register`` or ``promote`` action: print its report, or exit 10 on a failed check."""
+    """Run a registry action (``register``, ``promote``, ``evaluate-test``).
+
+    Print its report, or exit 10 on a failed check.
+    """
     # Imported here so `--help` and the stubs stay fast and need no mlflow.
     from claimfreq.registry import RegistryCheckError
 
@@ -158,6 +160,22 @@ def _promote(args: argparse.Namespace) -> int:
             f"promote: champion is now version {target.version} "
             f"({target.tags.get(TAG_SEMVER, 'no semver')}); was {was}{cleared}. Restart the api "
             "container to serve it."
+        )
+
+    return _registry_command(action)
+
+
+def _evaluate_test(args: argparse.Namespace) -> int:
+    """Score the champion on splits/test and log test_* metrics on its run; exit 10 if none."""
+
+    def action() -> str:
+        from claimfreq.evaluation import evaluate_test
+
+        result = evaluate_test()
+        scores = ", ".join(f"{key} {value:.4f}" for key, value in result.metrics.items())
+        return (
+            f"evaluate-test: champion version {result.version} ({result.semver}) on the test "
+            f"split: {scores}; logged on run {result.run_id}"
         )
 
     return _registry_command(action)
@@ -281,7 +299,7 @@ def build_parser() -> argparse.ArgumentParser:
     add(
         "evaluate-test",
         "Evaluate the champion on splits/test and log test_* metrics.",
-        _not_implemented(ROLE_MODELING),
+        _evaluate_test,
     )
 
     # Role A (Data) owns send-traffic: it replays Role A's test and drift files through the API.

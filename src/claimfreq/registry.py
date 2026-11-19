@@ -254,7 +254,7 @@ _NO_CHAMPION_ERRORS = {
 }
 
 
-def _champion(client: MlflowClient) -> ModelVersion | None:
+def current_champion(client: MlflowClient) -> ModelVersion | None:
     """Return the version with alias ``champion``, or None if the alias or model is missing."""
     try:
         return client.get_model_version_by_alias(REGISTERED_MODEL_NAME, ALIAS_CHAMPION)
@@ -336,7 +336,7 @@ def champion_comparison(
 
 def _ensure_challenger(client: MlflowClient, version: ModelVersion) -> None:
     """Point ``challenger`` at ``version`` unless it is the champion; safe to repeat."""
-    champion = _champion(client)
+    champion = current_champion(client)
     if champion is None or str(champion.version) != str(version.version):
         client.set_registered_model_alias(REGISTERED_MODEL_NAME, ALIAS_CHALLENGER, version.version)
 
@@ -393,7 +393,7 @@ def register(params: Params | None = None) -> Registration:
             "before registering"
         )
 
-    champion = _champion(client)
+    champion = current_champion(client)
     semver = next_semver(
         run_tags, champion.tags if champion is not None else None, highest_semver(versions)
     )
@@ -444,7 +444,7 @@ def promote(version: int) -> Promotion:
                 f"promote: {REGISTERED_MODEL_NAME} has no version {version}"
             ) from None
         raise
-    previous = _champion(client)
+    previous = current_champion(client)
     client.set_registered_model_alias(REGISTERED_MODEL_NAME, ALIAS_CHAMPION, target.version)
     cleared = (
         ALIAS_CHALLENGER in client.get_model_version(REGISTERED_MODEL_NAME, target.version).aliases

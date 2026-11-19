@@ -1,0 +1,96 @@
+"""Role B (Modeling): the ``claimfreq evaluate-test`` command.
+
+A human runs it after ``promote`` (docs/contracts.md, CLI). It scores the ``champion`` on the
+test split, which no other command reads, and logs ``test_*`` metrics on the champion's run
+(the ``train`` child run of the champion version), so ``/model-info`` reports them next to its
+``val_*`` metrics.
+
+- The champion is resolved once through the alias, then loaded by **version number**, so the
+  metrics land on the run of the model that was actually scored even if ``promote`` runs
+  meanwhile.
+- No champion, or a champion trained on another feature schema, is a failed check (exit 10):
+  its predictions on the current test split would mean nothing.
+- The test split's md5 is logged as tag ``test_data_hash`` on the same run, so the ``test_*``
+  metrics say which file they were measured on. Re-running ``evaluate-test`` appends a new step
+  to each metric; MLflow reports the latest.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+
+import mlflow
+import numpy as np
+from mlflow.tracking import MlflowClient
+
+from claimfreq import metrics
+from claimfreq.contracts import env, paths, schema
+from claimfreq.contracts.model import (
+    REGISTERED_MODEL_NAME,
+    TAG_SCHEMA_HASH,
+    TAG_SEMVER,
+    MetricPrefix,
+    file_md5,
+    split_xy_w,
+)
+from claimfreq.contracts.params import Params, load_params
+from claimfreq.registry import RegistryCheckError, current_champion
+from claimfreq.training import read_split
+
+logger = logging.getLogger(__name__)
+
+# Tag on the champion's run: md5 of the test split its `test_*` metrics were measured on.
+TAG_TEST_DATA_HASH = "test_data_hash"
+
+
+@dataclass(frozen=True)
+class Evaluation:
+    """The outcome of ``evaluate_test``."""
+
+    version: str  # the champion's registry version
+    semver: str  # its semantic version tag
+    run_id: str  # its run, which now holds the test_* metrics
+    metrics: dict[str, float]  # test_poisson_deviance, test_gini, test_calibration_ratio
+
+
+def evaluate_test(params: Params | None = None) -> Evaluation:
+    """Score the champion on ``splits/test.parquet`` and log ``test_*`` metrics on its run.
+
+    Raises:
+        RegistryCheckError: if there is no champion, or its ``schema_hash`` is not the current
+            feature schema's.
+        SchemaError: if the test split breaks the clean-stage schema.
+        FileNotFoundError: if there is no test split under ``DATA_DIR``.
+    """
+    params = params or load_params()
+    mlflow.set_tracking_uri(env.get(env.MLFLOW_TRACKING_URI))
+    client = MlflowClient()
+    champion = current_champion(client)
+    if champion is None:
+        raise RegistryCheckError(
+            f"evaluate-test: {REGISTERED_MODEL_NAME} has no champion; run promote first"
+        )
+    if champion.tags.get(TAG_SCHEMA_HASH) != schema.schema_hash():
+        raise RegistryCheckError(
+            f"evaluate-test: champion version {champion.version} was trained on another feature "
+            "schema than the current one; register and promote a model of this schema first"
+        )
+
+    test_path = paths.data_path(paths.TEST)
+    X, y, w = split_xy_w(read_split(test_path, params))
+    if not np.any(y > 0):
+        logger.warning("test split has no claims: test_gini and test_calibration_ratio are NaN")
+    model = mlflow.pyfunc.load_model(f"models:/{REGISTERED_MODEL_NAME}/{champion.version}")
+    predictions = np.asarray(model.predict(schema.coerce_features(X)), dtype=float)
+    scores = metrics.with_prefix(metrics.compute_all(y, predictions, w), MetricPrefix.TEST)
+
+    for key, value in scores.items():
+        client.log_metric(champion.run_id, key, value)
+    client.set_tag(champion.run_id, TAG_TEST_DATA_HASH, file_md5(test_path))
+    return Evaluation(
+        version=str(champion.version),
+        semver=champion.tags.get(TAG_SEMVER, ""),
+        run_id=champion.run_id,
+        metrics=scores,
+    )
