@@ -19,6 +19,9 @@ clean:
 training:
   selection_metric: poisson_deviance  # one of: poisson_deviance, gini, calibration_ratio
   flaml_time_budget_s: 300
+  flaml_max_iter: 500        # at most this many FLAML trials
+  flaml_holdout_ratio: 0.2   # share of the train split FLAML holds out (never the validation split)
+  candidates: [constant, poisson_glm, lightgbm, flaml]  # constant is required
   seed: 42                  # model seed, separate from the data seed
   glm:                      # Poisson GLM candidate
     alpha: 0.0001           # L2 penalty
@@ -26,6 +29,13 @@ training:
     solver: newton-cholesky # one of: lbfgs, newton-cholesky
     drivage_edges: [21, 25, 30, 40, 50, 60, 70]  # DrivAge bands: 18-20, 21-24, ..., 70+
     vehage_bins: 10         # VehAge quantile bins
+  lightgbm:                 # LightGBM Poisson candidate
+    n_estimators: 200
+    learning_rate: 0.05
+    num_leaves: 15
+    min_child_samples: 500        # large leaves: ~95% of policies have no claim
+    subsample: 0.8
+    colsample_bytree: 0.8
 
 # Role D (Serving and monitoring)
 traffic:

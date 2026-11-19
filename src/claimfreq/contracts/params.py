@@ -92,6 +92,23 @@ class GlmParams(_Section):
         return self
 
 
+class LightgbmParams(_Section):
+    """LightGBM Poisson candidate (``train``): fixed, hand-picked hyperparameters."""
+
+    n_estimators: int = Field(default=200, strict=True, ge=1)
+    learning_rate: float = Field(default=0.05, strict=True, gt=0)
+    num_leaves: int = Field(default=15, strict=True, ge=2)
+    # Large leaves: about 95% of policies have no claim, so small leaves fit noise.
+    min_child_samples: int = Field(default=500, strict=True, ge=1)
+    subsample: float = Field(default=0.8, strict=True, gt=0, le=1)
+    colsample_bytree: float = Field(default=0.8, strict=True, gt=0, le=1)
+
+
+# Candidate names accepted in `training.candidates`, in the order `train` logs them.
+CANDIDATE_NAMES = ("constant", "poisson_glm", "lightgbm", "flaml")
+CandidateName = Literal["constant", "poisson_glm", "lightgbm", "flaml"]
+
+
 class TrainingParams(_Section):
     """Model selection and AutoML settings."""
 
@@ -99,10 +116,26 @@ class TrainingParams(_Section):
     # never after looking at test results (ADR-0002).
     selection_metric: MetricName = MetricName.POISSON_DEVIANCE
     flaml_time_budget_s: int = Field(default=300, strict=True, gt=0)
+    # Upper bound on FLAML trials, so a fast machine cannot log thousands of trial runs.
+    flaml_max_iter: int = Field(default=500, strict=True, ge=1)
+    # Share of the train split FLAML holds out to compare its trials. The validation split is
+    # never shown to FLAML: it stays unseen until every candidate is scored on it.
+    flaml_holdout_ratio: float = Field(default=0.2, strict=True, gt=0, lt=1)
+    # Candidates `train` fits; "constant" is required, since every candidate must beat it.
+    candidates: list[CandidateName] = Field(default_factory=lambda: list(CANDIDATE_NAMES))
     # Model seed (AutoML search, model fitting). Separate from the data seed, so retraining with
     # another seed leaves the splits, and so dvc.lock, unchanged.
     seed: int = _seed_field()
     glm: GlmParams = Field(default_factory=GlmParams)
+    lightgbm: LightgbmParams = Field(default_factory=LightgbmParams)
+
+    @model_validator(mode="after")
+    def _baseline_and_unique_candidates(self) -> Self:
+        if "constant" not in self.candidates:
+            raise ValueError("training.candidates must include the 'constant' baseline")
+        if len(set(self.candidates)) != len(self.candidates):
+            raise ValueError("training.candidates must not repeat a candidate")
+        return self
 
 
 class TrafficParams(_Section):
