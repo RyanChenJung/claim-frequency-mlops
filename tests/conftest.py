@@ -6,10 +6,21 @@ from mlflow.tracking import MlflowClient
 
 from claimfreq.contracts import paths
 from claimfreq.contracts.model import MLFLOW_EXPERIMENT_NAME
+from claimfreq.contracts.params import Params
 from claimfreq.fakes import make_policies
 
 # Value of GIT_COMMIT in the `workspace` fixture, so tests can check the git_commit tag.
 FAKE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+# The fast, deterministic candidate set of most tests: the baseline and the GLM. The tree
+# candidates (LightGBM, a timed FLAML search) have their own tests in test_tree_candidates.py.
+FAST_CANDIDATES = ["constant", "poisson_glm"]
+FAST_TRAINING = {"flaml_time_budget_s": 2, "flaml_max_iter": 8, "candidates": FAST_CANDIDATES}
+
+
+def fast_params(**training: object) -> Params:
+    """Return Params with a fast training section; keyword arguments override its keys."""
+    return Params.model_validate({"training": {**FAST_TRAINING, **training}})
 
 
 @pytest.fixture
@@ -25,6 +36,11 @@ def workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(data_dir))
     monkeypatch.setenv("MLFLOW_TRACKING_URI", tracking_uri)
     monkeypatch.setenv("GIT_COMMIT", FAKE_COMMIT)
+    # `train` and `register` called without params (as the CLI does) load these, never the
+    # shipped params.yaml with its 300 s FLAML budget. The imported names are patched, since
+    # load_params binds its default path at import time.
+    monkeypatch.setattr("claimfreq.training.load_params", fast_params)
+    monkeypatch.setattr("claimfreq.registry.load_params", fast_params)
     # Create the experiment up front with its artifacts under tmp_path; with SQLite, MLflow
     # would otherwise put them in ./mlruns, inside the repository.
     mlflow.set_tracking_uri(tracking_uri)
