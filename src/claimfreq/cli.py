@@ -172,6 +172,27 @@ def _utc_datetime(value: str) -> datetime:
     return moment.astimezone(UTC)
 
 
+def _clean(args: argparse.Namespace) -> int:
+    """Cap ClaimNb and Exposure in the raw file and write the clean-stage file."""
+    # Imported here so `--help` and the stubs stay fast and need no pandas.
+    from claimfreq.clean import clean
+
+    out, n_rows, n_clipped = clean()
+    clipped = ", ".join(f"{column} on {count} rows" for column, count in n_clipped.items())
+    print(f"clean: wrote {n_rows} policies to {out} (clipped {clipped})")
+    return EXIT_OK
+
+
+def _split(args: argparse.Namespace) -> int:
+    """Split the clean-stage file into the train, validation, and test files."""
+    # Imported here so `--help` and the stubs stay fast and need no pandas or scikit-learn.
+    from claimfreq.split import split
+
+    for out, n_rows in split().items():
+        print(f"split: wrote {n_rows} policies to {out}")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with every subcommand of the CLI contract."""
     parser = argparse.ArgumentParser(
@@ -197,12 +218,12 @@ def build_parser() -> argparse.ArgumentParser:
     add(
         "clean",
         "Read raw/, cap ClaimNb and Exposure, and write processed/policies.parquet.",
-        _not_implemented(ROLE_DATA),
+        _clean,
     )
     add(
         "split",
         "Read processed/ and write splits/train, splits/validation, and splits/test parquet.",
-        _not_implemented(ROLE_DATA),
+        _split,
     )
     add(
         "make-drift",
