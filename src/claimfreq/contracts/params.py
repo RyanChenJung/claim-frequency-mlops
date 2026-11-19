@@ -21,10 +21,10 @@ every field explicitly (a test checks the keys); the defaults here serve tests a
 """
 
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 from claimfreq.contracts.api import MAX_BATCH_SIZE
 from claimfreq.contracts.model import MetricName
@@ -69,6 +69,29 @@ class CleanParams(_Section):
     exposure_cap: float = Field(default=DEFAULT_EXPOSURE_CAP, strict=True, gt=0)
 
 
+class GlmParams(_Section):
+    """Poisson GLM candidate (``train``): penalty, solver, and how numeric factors enter."""
+
+    # L2 penalty of PoissonRegressor; small, so it only keeps the one-hot design well conditioned.
+    alpha: float = Field(default=1e-4, strict=True, ge=0)
+    max_iter: int = Field(default=1000, strict=True, ge=1)
+    solver: Literal["lbfgs", "newton-cholesky"] = "newton-cholesky"
+    # Left edges of the DrivAge bands after the first band, which starts at the minimum age 18.
+    # Fine bands at young ages keep the young-driver effect visible.
+    drivage_edges: list[StrictInt] = Field(
+        default_factory=lambda: [21, 25, 30, 40, 50, 60, 70], strict=True, min_length=1
+    )
+    # VehAge enters as this many quantile bins.
+    vehage_bins: int = Field(default=10, strict=True, ge=2)
+
+    @model_validator(mode="after")
+    def _increasing_edges(self) -> Self:
+        edges = self.drivage_edges
+        if any(low >= high for low, high in zip(edges, edges[1:], strict=False)):
+            raise ValueError("drivage_edges must be strictly increasing")
+        return self
+
+
 class TrainingParams(_Section):
     """Model selection and AutoML settings."""
 
@@ -79,6 +102,7 @@ class TrainingParams(_Section):
     # Model seed (AutoML search, model fitting). Separate from the data seed, so retraining with
     # another seed leaves the splits, and so dvc.lock, unchanged.
     seed: int = _seed_field()
+    glm: GlmParams = Field(default_factory=GlmParams)
 
 
 class TrafficParams(_Section):

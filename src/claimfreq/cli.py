@@ -2,9 +2,9 @@
 
 The Airflow DAGs (Role C) and DVC stages (Role A) call these commands inside the ``trainer``
 image, so the command line is the only interface they depend on (ADR-0003). Each command
-already exists with its final arguments; only ``fake-data`` works today. The others are stubs
-that exit with ``EXIT_NOT_IMPLEMENTED`` until their owner replaces the stub with a real
-implementation, without changing the command line.
+already exists with its final arguments. Commands not implemented yet are stubs that exit with
+``EXIT_NOT_IMPLEMENTED`` until their owner replaces the stub with a real implementation, without
+changing the command line; ``tests/test_cli.py`` lists the remaining stubs in ``STUBS``.
 
 Exit codes (any nonzero code makes Airflow mark the task failed):
 
@@ -89,6 +89,16 @@ def _fake_data(args: argparse.Namespace) -> int:
     policies = make_policies(args.rows, seed=args.seed, id_start=args.id_start)
     policies.to_parquet(out, index=False)
     print(f"wrote {args.rows} fake policies to {out}")
+    return EXIT_OK
+
+
+def _train(args: argparse.Namespace) -> int:
+    """Train every candidate and log one parent MLflow run with a child run per candidate."""
+    # Imported here so `--help` and the stubs stay fast and need no mlflow.
+    from claimfreq.training import train
+
+    parent_run_id = train()
+    print(f"train: logged candidate set {parent_run_id}")
     return EXIT_OK
 
 
@@ -190,7 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
         "train",
         "Train candidates on splits/train, evaluate on splits/validation, and log each as a "
         "child run of one parent MLflow run per invocation.",
-        _not_implemented(ROLE_MODELING),
+        _train,
     )
     add(
         "register",
