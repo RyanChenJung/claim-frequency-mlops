@@ -102,46 +102,65 @@ def _train(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _register(args: argparse.Namespace) -> int:
-    """Register the best candidate of the latest train run as challenger; exit 10 if none."""
+def _registry_command(action: Callable[[], str]) -> int:
+    """Run a ``register`` or ``promote`` action: print its report, or exit 10 on a failed check."""
     # Imported here so `--help` and the stubs stay fast and need no mlflow.
-    from claimfreq.registry import RegistryCheckError, register
+    from claimfreq.registry import RegistryCheckError
 
     try:
-        result = register()
+        print(action())
     except RegistryCheckError as error:
         print(error, file=sys.stderr)
         return EXIT_CHECK_FAILED
-    if result.already_registered:
-        print(
-            f"register: run {result.run_id} is already version {result.version} "
-            f"({result.semver}); nothing registered"
-        )
-    else:
-        print(
-            f"register: version {result.version} ({result.semver}, {result.algorithm}) "
-            f"is the challenger"
-        )
     return EXIT_OK
+
+
+def _register(args: argparse.Namespace) -> int:
+    """Register the best candidate of the latest train run as challenger; exit 10 if none."""
+
+    def action() -> str:
+        from claimfreq.registry import register
+
+        result = register()
+        lines = []
+        if result.skipped_parents:
+            lines.append(
+                f"register: skipped {result.skipped_parents} newer train run(s) that did not "
+                f"finish; falling back to candidate set {result.candidate_set}"
+            )
+        if result.already_registered:
+            lines.append(
+                f"register: run {result.run_id} (candidate set {result.candidate_set}) is "
+                f"already version {result.version} ({result.semver}); nothing registered"
+            )
+        else:
+            lines.append(
+                f"register: version {result.version} ({result.semver}, {result.algorithm}) "
+                f"from candidate set {result.candidate_set} is the challenger"
+            )
+        return "\n".join(lines)
+
+    return _registry_command(action)
 
 
 def _promote(args: argparse.Namespace) -> int:
     """Move the champion alias to ``--version``; exit 10 if that version does not exist."""
-    from claimfreq.contracts.model import TAG_SEMVER
-    from claimfreq.registry import RegistryCheckError, promote
 
-    try:
-        target, previous = promote(args.version)
-    except RegistryCheckError as error:
-        print(error, file=sys.stderr)
-        return EXIT_CHECK_FAILED
-    was = f"version {previous.version}" if previous is not None else "no champion"
-    print(
-        f"promote: champion is now version {target.version} "
-        f"({target.tags.get(TAG_SEMVER, 'no semver')}); was {was}. Restart the api container "
-        "to serve it."
-    )
-    return EXIT_OK
+    def action() -> str:
+        from claimfreq.contracts.model import TAG_SEMVER
+        from claimfreq.registry import promote
+
+        result = promote(args.version)
+        target, previous = result.target, result.previous
+        was = f"version {previous.version}" if previous is not None else "no champion"
+        cleared = "; challenger alias cleared" if result.cleared_challenger else ""
+        return (
+            f"promote: champion is now version {target.version} "
+            f"({target.tags.get(TAG_SEMVER, 'no semver')}); was {was}{cleared}. Restart the api "
+            "container to serve it."
+        )
+
+    return _registry_command(action)
 
 
 # argparse types raise ArgumentTypeError: for any other error, argparse would print the

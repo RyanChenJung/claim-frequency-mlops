@@ -3,29 +3,38 @@
 ``register`` (an Airflow task, right after ``train``):
 
 1. Finds the most recent ``train`` parent run whose status is ``FINISHED`` and considers only its
-   ``FINISHED`` direct children (docs/contracts.md, Model: candidate scope).
+   ``FINISHED`` direct children (docs/contracts.md, Model: candidate scope). If newer parents
+   ended ``FAILED`` (or are still running), it falls back to that older candidate set and says so.
 2. Picks the best child by ``val_<training.selection_metric>`` with ``is_better``. A child whose
-   value is NaN or missing is never picked.
-3. Registers that child's already-logged Pipeline (an MLflow logged model named ``model``,
-   linked to the child run) as
-   ``claim-frequency``, with every model-version tag and the alias ``challenger``. If that run
-   is already registered, nothing is registered twice: the command reports it and exits 0.
-4. Logs the reference dataset (validation split + predictions) on the child run.
-5. Compares the challenger with the ``champion`` on the same holdout: the current validation
-   split. The champion is re-scored on it, so both numbers come from the same data even when
-   the champion was trained on an older data version. The comparison keys are below.
+   value is NaN or missing is never picked; on a tie the earlier child wins.
+3. If that child is already a registered version, registers nothing and only makes sure the
+   ``challenger`` alias points at it (unless it is the champion), so a retry repairs an alias
+   call that failed. This check runs first, so a re-run is always a no-op.
+4. Otherwise it checks that the train split under ``DATA_DIR`` is the file the run was trained
+   on (md5 = the run's ``data_hash``), because steps 5 and 6 read the validation split.
+5. Logs the comparison with the ``champion`` as tags on the child run (keys below): the champion
+   version is re-scored on the current validation split, the same holdout as the challenger.
+6. Logs the reference dataset (validation split + the challenger's predictions) on the child run.
+7. Registers the child's logged model (an MLflow logged model named ``model``, linked to the
+   child run) as ``claim-frequency``, with every model-version tag, and sets alias ``challenger``.
 
-``promote --version N`` (a human, ADR-0007) moves the ``champion`` alias to version N.
+``promote --version N`` (a human, ADR-0007) moves the ``champion`` alias to version N. If the
+``challenger`` alias pointed at N, it is removed: the challenger is the newest best model *not
+yet promoted*.
 
-Semantic version of a new challenger (ADR-0007), against the champion:
+Semantic version of a new version (ADR-0007):
 
-- no champion yet: ``1.0.0``;
-- ``schema_hash`` differs: MAJOR (the input contract changed);
-- otherwise ``data_hash`` or ``algorithm`` differs: MINOR (predictions change, code does not);
-- otherwise: PATCH (same data and algorithm, for example a hyperparameter change).
+- nothing registered yet: ``1.0.0``;
+- versions exist but there is no champion: MINOR bump (the schema is not compared, since no
+  client is served yet);
+- with a champion, compared with it: ``schema_hash`` differs → MAJOR; otherwise ``data_hash``
+  or ``algorithm`` differs → MINOR; otherwise PATCH (for example a hyperparameter change).
 
 The bump is applied to the highest ``semver`` registered so far, not to the champion's, so two
-challengers registered before any promotion never share a version string.
+challengers registered before a promotion never share a version string. Consequence: the first
+champion is ``1.0.0`` only if it is the first version ever registered. Before the real first
+training run, reset the registry with ``MlflowClient().delete_registered_model("claim-frequency")``
+(runs and artifacts stay), and run ``register`` only once before the first ``promote``.
 """
 
 from __future__ import annotations
@@ -79,18 +88,22 @@ FIRST_VERSION = "1.0.0"
 # MLflow's string for a run that ended without an exception.
 FINISHED = RunStatus.to_string(RunStatus.FINISHED)
 
-# Comparison with the champion, logged on the challenger's (child) run. Role B's own keys: no
+# Comparison with the champion, logged as **tags** on the challenger's (child) run. They are tags,
+# not metrics, so the run's metrics stay the model's own: `/model-info` reports a run's metrics,
+# and the metric-key rule allows only the val_, test_, and live_ prefixes. Role B's own keys: no
 # other role reads them; they are for the person who decides on `promote`.
-# Metrics: the champion re-scored on this validation split, e.g. champion_val_poisson_deviance.
-CHAMPION_METRIC_PREFIX = "champion_"
-# Tags: the champion's registry version and semver, or "none" when no champion exists yet.
+# The champion re-scored on this validation split, e.g. champion_val_poisson_deviance = "0.45".
+CHAMPION_TAG_PREFIX = "champion_"
+# The champion's registry version and semver, or "none" when no champion exists yet.
 TAG_CHAMPION_VERSION = "champion_version"
 TAG_CHAMPION_SEMVER = "champion_semver"
 NO_CHAMPION = "none"
-# Tag: "true" if the challenger beats the champion on the selection metric, "false" if not,
-# "no_champion" when there is nothing to compare with.
+# "true" / "false": the challenger is / is not better on the selection metric (is_better).
+# "no_champion": nothing to compare with. "incomparable": the schema changed, so the champion
+# cannot score the new split (its signature would reject it).
 TAG_BEATS_CHAMPION = "beats_champion"
 NO_CHAMPION_COMPARISON = "no_champion"
+INCOMPARABLE = "incomparable"
 
 
 class RegistryCheckError(Exception):
@@ -105,7 +118,21 @@ class Registration:
     semver: str
     run_id: str
     algorithm: str
+    # The train parent run whose candidates were considered.
+    candidate_set: str
+    # Number of newer train parents skipped because they did not finish (FAILED or running).
+    skipped_parents: int = 0
     already_registered: bool = False
+
+
+@dataclass(frozen=True)
+class Promotion:
+    """What ``promote`` did, for the CLI to print."""
+
+    target: ModelVersion
+    previous: ModelVersion | None
+    # True if the challenger alias pointed at the promoted version and was removed.
+    cleared_challenger: bool
 
 
 # --- Semantic versions --------------------------------------------------------------------------
@@ -161,17 +188,25 @@ def highest_semver(versions: list[ModelVersion]) -> str | None:
 # --- Selection ----------------------------------------------------------------------------------
 
 
-def latest_finished_parent(client: MlflowClient, experiment_id: str) -> Run:
-    """Return the most recent ``FINISHED`` train parent run; raise ``RegistryCheckError``."""
+def latest_finished_parent(client: MlflowClient, experiment_id: str) -> tuple[Run, int]:
+    """Return the most recent ``FINISHED`` train parent and how many newer parents it skipped.
+
+    Raises:
+        RegistryCheckError: if no train parent run has finished.
+    """
     # A parent carries candidate_set but, unlike its children, no mlflow.parentRunId tag.
     runs = client.search_runs(
         [experiment_id],
-        filter_string=(f"tags.{TAG_CANDIDATE_SET} != '' and attributes.status = '{FINISHED}'"),
+        filter_string=f"tags.{TAG_CANDIDATE_SET} != ''",
         order_by=["attributes.start_time DESC"],
     )
+    skipped = 0
     for run in runs:
-        if "mlflow.parentRunId" not in run.data.tags:
-            return run
+        if "mlflow.parentRunId" in run.data.tags:
+            continue
+        if run.info.status == FINISHED:
+            return run, skipped
+        skipped += 1
     raise RegistryCheckError("register: no FINISHED train run found; run `claimfreq train` first")
 
 
@@ -264,37 +299,55 @@ def _log_reference(client: MlflowClient, run_id: str, reference: pd.DataFrame) -
         client.log_artifact(run_id, str(local), artifact_path=artifact_dir)
 
 
-def _log_champion_comparison(
-    client: MlflowClient,
-    run_id: str,
+def champion_comparison(
     champion: ModelVersion | None,
     validation: pd.DataFrame,
     selection_metric: str,
     challenger_value: float,
-) -> None:
-    """Re-score the champion on ``validation`` and log the comparison on the challenger's run."""
+    challenger_schema_hash: str,
+) -> dict[str, str]:
+    """Return the comparison tags of a challenger against ``champion`` (keys above).
+
+    The champion version is loaded by number (not through the alias, which a concurrent
+    ``promote`` could move) and re-scored on ``validation``.
+    """
     if champion is None:
-        client.set_tag(run_id, TAG_CHAMPION_VERSION, NO_CHAMPION)
-        client.set_tag(run_id, TAG_BEATS_CHAMPION, NO_CHAMPION_COMPARISON)
-        return
+        return {
+            TAG_CHAMPION_VERSION: NO_CHAMPION,
+            TAG_CHAMPION_SEMVER: NO_CHAMPION,
+            TAG_BEATS_CHAMPION: NO_CHAMPION_COMPARISON,
+        }
+    tags = {
+        TAG_CHAMPION_VERSION: str(champion.version),
+        TAG_CHAMPION_SEMVER: champion.tags.get(TAG_SEMVER, ""),
+    }
+    if champion.tags.get(TAG_SCHEMA_HASH) != challenger_schema_hash:
+        return {**tags, TAG_BEATS_CHAMPION: INCOMPARABLE}
     X, y, w = split_xy_w(validation)
-    model = mlflow.pyfunc.load_model(f"models:/{REGISTERED_MODEL_NAME}@{ALIAS_CHAMPION}")
+    model = mlflow.pyfunc.load_model(f"models:/{REGISTERED_MODEL_NAME}/{champion.version}")
     predictions = np.asarray(model.predict(schema.coerce_features(X)), dtype=float)
     scores = metrics.compute_all(y, predictions, w)
     for name, value in metrics.with_prefix(scores, MetricPrefix.VAL).items():
-        client.log_metric(run_id, f"{CHAMPION_METRIC_PREFIX}{name}", value)
-    client.set_tag(run_id, TAG_CHAMPION_VERSION, str(champion.version))
-    client.set_tag(run_id, TAG_CHAMPION_SEMVER, champion.tags.get(TAG_SEMVER, ""))
+        tags[f"{CHAMPION_TAG_PREFIX}{name}"] = repr(float(value))
     beats = is_better(selection_metric, challenger_value, scores[selection_metric])
-    client.set_tag(run_id, TAG_BEATS_CHAMPION, str(beats).lower())
+    tags[TAG_BEATS_CHAMPION] = str(beats).lower()
+    return tags
+
+
+def _ensure_challenger(client: MlflowClient, version: ModelVersion) -> None:
+    """Point ``challenger`` at ``version`` unless it is the champion; safe to repeat."""
+    champion = _champion(client)
+    if champion is None or str(champion.version) != str(version.version):
+        client.set_registered_model_alias(REGISTERED_MODEL_NAME, ALIAS_CHALLENGER, version.version)
 
 
 def register(params: Params | None = None) -> Registration:
     """Register the best candidate of the latest finished ``train`` run as ``challenger``.
 
     Raises:
-        RegistryCheckError: no finished train run, no scored candidate, or the validation and
-            train splits under ``DATA_DIR`` are not the data that train run used.
+        RegistryCheckError: no finished train run, no scored candidate, a run without its
+            logged model, or (for a run not registered yet) a train split under ``DATA_DIR``
+            that is not the file the run was trained on.
     """
     params = params or load_params()
     selection_metric = params.training.selection_metric.value
@@ -302,31 +355,43 @@ def register(params: Params | None = None) -> Registration:
     client = MlflowClient()
     experiment = client.get_experiment_by_name(MLFLOW_EXPERIMENT_NAME)
     if experiment is None:
-        raise RegistryCheckError("register: no train run found; run `claimfreq train` first")
+        raise RegistryCheckError(
+            "register: no FINISHED train run found; run `claimfreq train` first"
+        )
 
-    parent = latest_finished_parent(client, experiment.experiment_id)
+    parent, skipped = latest_finished_parent(client, experiment.experiment_id)
     best = select_best(
         finished_children(client, experiment.experiment_id, parent.info.run_id), selection_metric
     )
     run_tags = best.data.tags
-    # The reference and the comparison must be computed on the data this run was trained with.
-    train_hash = file_md5(paths.data_path(paths.TRAIN))
-    if train_hash != run_tags[TAG_DATA_HASH]:
-        raise RegistryCheckError(
-            f"register: {paths.data_path(paths.TRAIN)} has md5 {train_hash}, but the latest train "
-            f"run used {run_tags[TAG_DATA_HASH]}; check out the matching data before registering"
-        )
+    found = {
+        "run_id": best.info.run_id,
+        "algorithm": run_tags[TAG_ALGORITHM],
+        "candidate_set": parent.info.run_id,
+        "skipped_parents": skipped,
+    }
 
+    # Idempotent first: a retry registers nothing, but repairs the challenger alias.
     versions = _registered_versions(client)
     for existing in versions:
         if existing.run_id == best.info.run_id:
+            _ensure_challenger(client, existing)
             return Registration(
                 version=str(existing.version),
                 semver=existing.tags.get(TAG_SEMVER, ""),
-                run_id=best.info.run_id,
-                algorithm=run_tags[TAG_ALGORITHM],
                 already_registered=True,
+                **found,
             )
+
+    # The comparison and the reference read the validation split: it must be the data version
+    # this run was trained with. The train split's md5 is the run's data_hash.
+    train_hash = file_md5(paths.data_path(paths.TRAIN))
+    if train_hash != run_tags[TAG_DATA_HASH]:
+        raise RegistryCheckError(
+            f"register: {paths.data_path(paths.TRAIN)} has md5 {train_hash}, but the train run "
+            f"{parent.info.run_id} used {run_tags[TAG_DATA_HASH]}; check out the matching data "
+            "before registering"
+        )
 
     champion = _champion(client)
     semver = next_semver(
@@ -344,9 +409,11 @@ def register(params: Params | None = None) -> Registration:
     }
 
     validation = read_split(paths.data_path(paths.VALIDATION), params)
-    _log_champion_comparison(
-        client, best.info.run_id, champion, validation, selection_metric, value
+    comparison = champion_comparison(
+        champion, validation, selection_metric, value, run_tags[TAG_SCHEMA_HASH]
     )
+    for key, tag_value in comparison.items():
+        client.set_tag(best.info.run_id, key, tag_value)
     model_uri = logged_model_uri(client, best)
     model = mlflow.pyfunc.load_model(model_uri)
     X_val, _, _ = split_xy_w(validation)
@@ -355,19 +422,14 @@ def register(params: Params | None = None) -> Registration:
 
     registered = mlflow.register_model(model_uri, REGISTERED_MODEL_NAME, tags=version_tags)
     client.set_registered_model_alias(REGISTERED_MODEL_NAME, ALIAS_CHALLENGER, registered.version)
-    return Registration(
-        version=str(registered.version),
-        semver=semver,
-        run_id=best.info.run_id,
-        algorithm=run_tags[TAG_ALGORITHM],
-    )
+    return Registration(version=str(registered.version), semver=semver, **found)
 
 
 # --- Promote ------------------------------------------------------------------------------------
 
 
-def promote(version: int) -> tuple[ModelVersion, ModelVersion | None]:
-    """Move alias ``champion`` to ``version``; return the new and the previous champion.
+def promote(version: int) -> Promotion:
+    """Move alias ``champion`` to ``version``; clear ``challenger`` if it pointed there.
 
     Raises:
         RegistryCheckError: if ``claim-frequency`` has no version ``version``.
@@ -384,4 +446,9 @@ def promote(version: int) -> tuple[ModelVersion, ModelVersion | None]:
         raise
     previous = _champion(client)
     client.set_registered_model_alias(REGISTERED_MODEL_NAME, ALIAS_CHAMPION, target.version)
-    return target, previous
+    cleared = (
+        ALIAS_CHALLENGER in client.get_model_version(REGISTERED_MODEL_NAME, target.version).aliases
+    )
+    if cleared:
+        client.delete_registered_model_alias(REGISTERED_MODEL_NAME, ALIAS_CHALLENGER)
+    return Promotion(target=target, previous=previous, cleared_challenger=cleared)
