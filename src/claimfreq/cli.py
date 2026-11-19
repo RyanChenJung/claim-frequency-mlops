@@ -70,6 +70,21 @@ def _not_implemented(owner: str) -> Handler:
     return handler
 
 
+def _ingest(args: argparse.Namespace) -> int:
+    """Download OpenML 41214, check it, and write the raw-stage parquet file."""
+    # Imported here so `--help` and the stubs stay fast and need no pandas or scikit-learn.
+    from claimfreq.ingest import CountCheckError, ingest
+
+    try:
+        out, n_rows = ingest()
+    except CountCheckError as error:
+        # Wrong totals are a failed check (exit 10), like a SchemaError, not a crash.
+        print(error, file=sys.stderr)
+        return EXIT_CHECK_FAILED
+    print(f"ingest: wrote {n_rows} policies to {out}")
+    return EXIT_OK
+
+
 def _fake_data(args: argparse.Namespace) -> int:
     """Write schema-valid synthetic clean-stage policies to a parquet file."""
     # Imported here so `--help` and the stubs stay fast and need no pandas or scikit-learn.
@@ -167,7 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
     add(
         "ingest",
         "Download OpenML dataset 41214 and write raw/freMTPL2freq.parquet (raw stage).",
-        _not_implemented(ROLE_DATA),
+        _ingest,
     )
     add(
         "clean",
