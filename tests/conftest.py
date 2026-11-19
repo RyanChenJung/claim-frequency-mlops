@@ -1,4 +1,4 @@
-"""Shared fixtures for the Role B tests (``train``, ``register``, ``promote``)."""
+"""Shared fixtures for the Role B tests: ``train``, ``register``, ``promote``, ``evaluate-test``."""
 
 import mlflow
 import pytest
@@ -32,6 +32,7 @@ def workspace(tmp_path, monkeypatch):
     make_policies(3_000, seed=2, id_start=500_000).to_parquet(
         data_dir / paths.VALIDATION, index=False
     )
+    make_policies(3_000, seed=3, id_start=700_000).to_parquet(data_dir / paths.TEST, index=False)
     tracking_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
     monkeypatch.setenv("DATA_DIR", str(data_dir))
     monkeypatch.setenv("MLFLOW_TRACKING_URI", tracking_uri)
