@@ -38,48 +38,48 @@ Every pipeline step is a `claimfreq` command in the `trainer` image ([ADR-0003](
 
 ```mermaid
 flowchart LR
-    subgraph data["Data path (Role A)"]
-        openml[("OpenML 41214")] --> ingest["ingest"] --> clean["clean"] --> split["split"]
-        split --> drift["make-drift<br/>5 drift scenarios"]
-        dvc[["DVC stages<br/>dvc.yaml / dvc.lock"]] -. versions .-> dagshub[("DagsHub remote")]
+    openml[("OpenML 41214")]
+    subgraph dvc["DVC stages: dvc.yaml / dvc.lock (Role A)"]
+        ingest["ingest"] --> clean["clean"] --> split["split"] --> drift["make-drift<br/>5 drift scenarios"]
     end
+    openml --> ingest
+    dvc -- "dvc push / pull" --> dagshub[("DagsHub remote")]
 
-    subgraph training["Airflow DAG: training (Roles B and C)"]
-        repro["dvc_repro"] --> train["train<br/>constant, GLM,<br/>LightGBM, FLAML"] --> register["register<br/>best val_poisson_deviance"]
+    subgraph airflow["Airflow (Role C)"]
+        tdag["training DAG<br/>dvc_repro → train → register"]
+        mdag["monitor DAG<br/>monitor → retrain_on_drift"]
     end
+    image[["trainer image<br/>claimfreq CLI"]]
+    tdag -- DockerOperator --> image
+    mdag -- DockerOperator --> image
+    image -. "dvc_repro" .-> dvc
+    split -- "splits/train, validation" --> image
 
-    subgraph mlflow["MLflow (Postgres + artifact volume)"]
-        runs[("experiment<br/>claim-frequency")]
-        registry[("registry: claim-frequency<br/>@challenger / @champion")]
+    subgraph mlflow["MLflow tracking and registry"]
+        runs[("experiment claim-frequency<br/>train: constant, GLM, LightGBM, FLAML")]
+        registry[("registry claim-frequency<br/>@challenger, @champion")]
     end
+    image -- "train: runs, metrics, models" --> runs
+    image -- "register: version + reference dataset" --> registry
+    human(["human"]) -- "promote --version N<br/>evaluate-test" --> registry
 
-    subgraph serving["Serving (Role D)"]
+    subgraph serving["Serving and monitoring (Role D)"]
         api["FastAPI api<br/>/predict /health /model-info"]
-        pg[("Postgres monitoring DB<br/>prediction_log<br/>rejected_request_log<br/>ground_truth")]
+        pg[("Postgres monitoring DB<br/>prediction_log, rejected_request_log,<br/>ground_truth")]
+        evidently["Evidently UI"]
+        alert["alert: red task,<br/>Discord webhook if set"]
     end
-
-    subgraph monitoring["Airflow DAG: monitor (Role D)"]
-        monitor["monitor<br/>Evidently checks"] --> retrain{"exit 10 and<br/>retrain_on_drift?"}
-    end
-
-    split -- "splits/train, validation" --> train
-    repro -. runs .-> dvc
-    train -- "runs, metrics, models" --> runs
-    register -- "new version, reference dataset" --> registry
-    human(["human"]) -- "promote --version N" --> registry
-    human -- "evaluate-test" --> registry
     registry -- "loads @champion at startup" --> api
-
     traffic["send-traffic<br/>test or drift file"] -- "POST /predict" --> api
     split -- "splits/test" --> traffic
     drift --> traffic
-    api -- "logs" --> pg
+    api -- logs --> pg
     traffic -- "writes ground_truth" --> pg
-    pg --> monitor
-    registry -- "champion's reference dataset" --> monitor
-    monitor -- snapshots --> evidently["Evidently UI"]
-    monitor -- "failed check" --> alert["alert: red task,<br/>Discord webhook if set"]
-    retrain -- "yes: trigger" --> repro
+    pg -- "monitor reads the window" --> image
+    registry -- "champion's reference dataset" --> image
+    image -- "monitor: snapshots" --> evidently
+    image -- "monitor: exit 10" --> alert
+    alert -. "retrain_on_drift: trigger" .-> tdag
 ```
 
 - **Data path.** `dvc repro` rebuilds the splits and drift files from OpenML; `dvc pull` fetches the same versions from DagsHub.
