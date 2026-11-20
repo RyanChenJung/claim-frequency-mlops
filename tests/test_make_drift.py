@@ -26,8 +26,12 @@ def checks(df: pd.DataFrame) -> set[tuple[str, str]]:
 
 @pytest.fixture
 def holdout() -> pd.DataFrame:
-    """Return a fake clean-stage test split (the input of make-drift), with test-range ids."""
-    return make_policies(N_ROWS, seed=3, id_start=900_000)
+    """Return a fake clean-stage test split (the input of make-drift), with test-range ids.
+
+    It is shuffled, like the real test split, so the tests cannot depend on IDpol order.
+    """
+    policies = make_policies(N_ROWS, seed=3, id_start=900_000)
+    return policies.sample(frac=1, random_state=0).reset_index(drop=True)
 
 
 @pytest.fixture
@@ -79,7 +83,9 @@ def test_portfolio_shift_samples_real_rows_and_meets_its_effect_sizes(holdout, s
     shifted = scenarios[DriftScenario.PORTFOLIO_SHIFT]
     assert len(shifted) == round(Params().drift.portfolio_shift.sample_fraction * N_ROWS)
     assert shifted[ID].is_unique
-    assert shifted[ID].is_monotonic_increasing
+    # Sampled rows keep their relative order from the test split.
+    position = pd.Series(holdout.index, index=holdout[ID])
+    assert position.loc[shifted[ID]].is_monotonic_increasing
     # Every sampled row is an unchanged row of the test split.
     expected = holdout.set_index(ID).loc[shifted[ID]].reset_index()[schema.FRAME_COLUMNS]
     pd.testing.assert_frame_equal(shifted, expected)
