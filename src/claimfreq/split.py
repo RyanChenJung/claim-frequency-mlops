@@ -13,9 +13,14 @@ random with the top-level data ``seed``, and stratified on whether a policy has 
 three files have the same share of claimants (about 5%) and their scores are comparable. Each
 policy lands in exactly one file, so the ``IDpol`` values are disjoint by construction.
 
-Each file is sorted by ``IDpol``: the seed decides which file a policy lands in, not the row
-order. The input and all three outputs must pass the clean stage before any file is written; a
-failure raises ``SchemaError``, which ``claimfreq`` turns into exit code 10.
+Rows are shuffled with the seed, not sorted. freMTPL2's lowest ``IDpol`` values are all
+claimants, so a file sorted by ``IDpol`` would start with an unrepresentative block, and a
+partial replay or an early monitoring window would look like drift on clean traffic. The input
+is sorted by ``IDpol`` first, so which file a policy lands in, and where, depends only on the set
+of policies and the seed, never on the input's row order.
+
+The input and all three outputs must pass the clean stage before any file is written; a failure
+raises ``SchemaError``, which ``claimfreq`` turns into exit code 10.
 """
 
 from __future__ import annotations
@@ -44,9 +49,12 @@ def split_policies(df: pd.DataFrame, params: Params) -> dict[str, pd.DataFrame]:
         params: Only ``params.split`` (the fractions) and ``params.seed`` are used.
 
     Returns:
-        ``{"train": ..., "validation": ..., "test": ...}``, each sorted by ``IDpol`` with a
-        fresh 0..n-1 index. The same data and seed always give the same three frames.
+        ``{"train": ..., "validation": ..., "test": ...}``, each in seeded random order with
+        a fresh 0..n-1 index. The same policies and seed always give the same three frames,
+        whatever the input's row order.
     """
+    # A canonical input order, so the result depends only on the policies and the seed.
+    df = df.sort_values(schema.ID_COLUMN).reset_index(drop=True)
     n_rows = len(df)
     # Row counts rather than fractions, so both sizes are exact fractions of the full dataset.
     n_test = round(params.split.test_fraction * n_rows)
@@ -63,10 +71,9 @@ def split_policies(df: pd.DataFrame, params: Params) -> dict[str, pd.DataFrame]:
         random_state=params.seed,
     )
     parts = {"train": train, "validation": validation, "test": test}
-    return {
-        name: part.sort_values(schema.ID_COLUMN).reset_index(drop=True)
-        for name, part in parts.items()
-    }
+    # train_test_split returns its rows in seeded random order. Keep that order: sorting by
+    # IDpol would put the real data's block of claimants first.
+    return {name: part.reset_index(drop=True) for name, part in parts.items()}
 
 
 def split(params: Params | None = None) -> dict[Path, int]:
@@ -95,6 +102,8 @@ def split(params: Params | None = None) -> dict[Path, int]:
     for name, part in parts.items():
         out = paths.data_path(SPLIT_PATHS[name])
         out.parent.mkdir(parents=True, exist_ok=True)
+        # The file's bytes, and so the md5 that DVC records and data_hash carries, also depend
+        # on the pandas and pyarrow versions written into the parquet metadata. uv.lock pins both.
         schema.coerce_frame(part).to_parquet(out, index=False)
         written[out] = len(part)
     return written

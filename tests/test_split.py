@@ -81,10 +81,19 @@ def test_every_split_has_the_same_share_of_claimants(policies):
         assert abs(share - overall) <= 2 / len(part), name
 
 
-def test_every_split_is_sorted_by_id_with_a_fresh_index(policies):
-    for part in split_policies(policies, Params()).values():
-        assert part[schema.ID_COLUMN].is_monotonic_increasing
+def test_every_split_is_shuffled_with_a_fresh_index(policies):
+    for name, part in split_policies(policies, Params()).items():
+        # Not sorted by IDpol: the real data's lowest ids are all claimants.
+        assert not part[schema.ID_COLUMN].is_monotonic_increasing, name
         assert part.index.equals(pd.RangeIndex(len(part)))
+
+
+def test_split_does_not_depend_on_the_input_row_order(policies):
+    reordered = policies.sample(frac=1, random_state=1).reset_index(drop=True)
+    first = split_policies(policies, Params())
+    second = split_policies(reordered, Params())
+    for name in NAMES:
+        pd.testing.assert_frame_equal(first[name], second[name])
 
 
 def test_cli_split_writes_three_valid_files(data_dir, capsys):
