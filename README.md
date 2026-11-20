@@ -90,12 +90,14 @@ docker compose --profile airflow up -d          # adds Airflow
 
 - MLflow: <http://localhost:5001>.
 - Airflow: <http://localhost:8080>, with no login. It is only reachable from this machine.
-- Both DAGs start paused. Unpause them once:
+- Both DAGs start paused, and a paused DAG runs nothing: a manual trigger just waits in the queue. Unpause them once:
 
 ```bash
 docker compose exec airflow-scheduler airflow dags unpause training
 docker compose exec airflow-scheduler airflow dags unpause monitor
 ```
+
+From then on, `monitor` also runs by itself, once right away and then at every full hour, each time on all of the previous hour's traffic. So the batches you send in steps 8 and 9 are checked again at the next full hour, pooled with the rest of that hour's traffic. Like a manual run, a scheduled run that fails a check triggers `training`. Until `monitor` is implemented ([#20](https://github.com/RyanChenJung/claim-frequency-mlops/issues/20)), every one of these runs fails with exit 3.
 
 ### 5. Train and register ⏳ [#14](https://github.com/RyanChenJung/claim-frequency-mlops/issues/14), [#15](https://github.com/RyanChenJung/claim-frequency-mlops/issues/15), [#16](https://github.com/RyanChenJung/claim-frequency-mlops/issues/16)
 
@@ -103,17 +105,19 @@ docker compose exec airflow-scheduler airflow dags unpause monitor
 docker compose exec airflow-scheduler airflow dags trigger training
 ```
 
-The `training` DAG runs `dvc_repro → train → register`. In MLflow, the candidates appear under the `claim-frequency` experiment, and the best one is registered as model `claim-frequency` with alias `challenger`.
+The `training` DAG runs `dvc_repro → train → register`. In MLflow, the candidates appear under the `claim-frequency` experiment, and the best one is registered as model `claim-frequency` with alias `challenger`. On the full data, `train` takes about 6 minutes, because FLAML searches for `training.flaml_time_budget_s` (300 s in `params.yaml`).
 
 ### 6. Promote and serve ⏳ [#15](https://github.com/RyanChenJung/claim-frequency-mlops/issues/15), [#17](https://github.com/RyanChenJung/claim-frequency-mlops/issues/17), [#22](https://github.com/RyanChenJung/claim-frequency-mlops/issues/22)
 
-Pick the version number `N` of the challenger in MLflow (Models → `claim-frequency`). Promotion is a human decision ([ADR-0007](docs/adr/0007-semver-and-human-promotion.md)):
+Pick the version number `N` of the challenger in MLflow (Models → `claim-frequency`). Promotion is a human decision ([ADR-0007](docs/adr/0007-semver-and-human-promotion.md)). To compare the challenger with the champion, open the version's source run: `register` logs the comparison there as tags, against the version that was champion when it ran (`champion_version`). `beats_champion` is `true`, `false`, `no_champion`, or `incomparable` (the schema changed), and `champion_val_<metric>` is that champion re-scored on the same validation split.
 
 ```bash
 docker compose run --rm trainer claimfreq promote --version N
 docker compose restart api                      # the API loads @champion at startup
 curl -s localhost:8000/model-info               # the first champion reports semver 1.0.0
 ```
+
+`promote` moves `champion` to version N and, if `challenger` pointed at N, removes `challenger`, so `challenger` never names the current champion.
 
 The API's interactive docs are at <http://localhost:8000/docs>.
 
@@ -142,6 +146,7 @@ docker compose exec airflow-scheduler airflow dags trigger monitor --conf '{"bat
 ```
 
 - The `monitor` run fails (red in Airflow).
+- Its `retrain_on_drift` task triggers the `training` DAG, which registers a new challenger. Promoting it stays a human decision.
 - The Evidently dashboard shows the drifted rating factors.
 - If `ALERT_WEBHOOK_URL` is set, a Discord message names the failed checks.
 
