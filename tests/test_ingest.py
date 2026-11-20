@@ -3,6 +3,7 @@
 No test touches the network: ``download`` is replaced with a small OpenML-like fake, and
 ``DATA_DIR`` points to ``tmp_path``, so nothing is written into the repository.
 """
+
 from types import SimpleNamespace
 
 import pandas as pd
@@ -123,4 +124,3 @@ def test_download_asks_openml_for_dataset_41214(monkeypatch):
     assert ingest_module.download() is raw
     # The dataset id and parsing options must not drift (ADR-0001).
     assert calls == [{"data_id": 41214, "as_frame": True, "parser": "pandas"}]
- 
