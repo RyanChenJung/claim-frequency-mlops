@@ -2,8 +2,12 @@
 
 The shared config must point at the team's DagsHub remote and must never hold a credential.
 Each member's DagsHub token belongs only in ``.dvc/config.local``, which DVC keeps out of git
-(``dvc remote modify --local``). If anyone forgets ``--local``, these tests fail in CI before
-the token reaches the public repository.
+(``dvc remote modify --local``; see #13 for the exact commands).
+
+Run ``uv run pytest tests/test_dvc_config.py`` before committing any change under ``.dvc/``:
+that is what catches a forgotten ``--local`` in time. CI runs only after a push, so a failure
+there means the token is already public: revoke it on DagsHub right away, create a new one, and
+store it with ``--local``.
 
 The file is INI-style, so the standard library's ``configparser`` reads it. DVC quotes the
 remote's section name, so it appears here as ``'remote "origin"'``, quotes included.
