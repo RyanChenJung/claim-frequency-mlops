@@ -105,7 +105,7 @@ services:
   # from starting it. Run a command with:
   #   docker compose run --rm trainer claimfreq <command>
   # The Airflow DockerOperator tasks run the same image (claimfreq-trainer:latest) with the
-  # same mount and variables, set explicitly per task (dags/claimfreq_tasks.py).
+  # same mount and contract variables, set explicitly per task (dags/claimfreq_tasks.py).
   trainer:
     profiles: ["tools"]
     build:
