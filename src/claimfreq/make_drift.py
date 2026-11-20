@@ -90,8 +90,8 @@ def portfolio_shift(test: pd.DataFrame, params: Params, rng: np.random.Generator
     """Sample policies without replacement, favouring young drivers in dense areas.
 
     Each policy's weight is ``exp(-age_weight * z(DrivAge) + density_weight * z(log Density))``
-    (``params.drift.portfolio_shift``). Rows keep their order from the test split, so the file
-    stays sorted by ``IDpol``, and every ``IDpol`` appears at most once.
+    (``params.drift.portfolio_shift``). Rows keep their order from the test split, which
+    ``split`` shuffles with the seed, and every ``IDpol`` appears at most once.
     """
     knobs = params.drift.portfolio_shift
     age = test["DrivAge"].to_numpy(dtype=float)
