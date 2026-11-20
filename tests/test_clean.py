@@ -90,3 +90,17 @@ def test_cli_clean_exits_10_on_a_bad_raw_file_and_writes_nothing(data_dir, capsy
     assert "raw frame" in err
     assert "DrivAge" in err
     assert not (data_dir / paths.PROCESSED).exists()
+
+
+def test_cli_clean_accepts_whole_number_floats_in_the_raw_file(data_dir):
+    raw_path = data_dir / paths.RAW
+    raw = pd.read_parquet(raw_path)
+    # Valid in the raw stage, as OpenML ships IDpol and ClaimNb.
+    raw.astype({schema.ID_COLUMN: "float64", schema.CLAIM_NB: "float64"}).to_parquet(
+        raw_path, index=False
+    )
+
+    assert main(["clean"]) == EXIT_OK
+    written = pd.read_parquet(data_dir / paths.PROCESSED)
+    assert written[schema.CLAIM_NB].dtype == "int64"
+    schema.validate_frame(written, "clean")

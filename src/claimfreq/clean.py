@@ -64,6 +64,9 @@ def clean(params: Params | None = None) -> tuple[Path, int, dict[str, int]]:
     raw = pd.read_parquet(paths.data_path(paths.RAW))
     # Check the input first, so a stale or hand-edited raw file stops here.
     schema.validate_frame(raw, "raw")
+    # Canonical dtypes before capping: a valid raw frame may hold whole-number floats in its
+    # integer columns, as OpenML ships IDpol and ClaimNb, and the clean stage rejects those.
+    raw = schema.coerce_frame(raw)
     cleaned, n_clipped = clip_targets(raw, params)
     # The caps come from params, so the clean-stage check must use the same params.
     schema.validate_frame(cleaned, "clean", params)
