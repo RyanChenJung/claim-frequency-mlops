@@ -3,6 +3,7 @@
 No test touches the network: ``download`` is replaced with a small OpenML-like fake, and
 ``DATA_DIR`` points to ``tmp_path``, so nothing is written into the repository.
 """
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -107,3 +108,19 @@ def test_check_counts_passes_on_matching_totals_and_names_each_mismatch():
     assert f"- claims: expected {expected['claims'] + 1:,}, got {expected['claims']:,}" in message
     assert "- rows" not in message
     assert "- regions" not in message
+
+
+def test_download_asks_openml_for_dataset_41214(monkeypatch):
+    raw = make_raw()
+    calls = []
+
+    def fake_fetch_openml(**kwargs):
+        """Stand-in for sklearn's fetch_openml: record the arguments, return a fake bunch."""
+        calls.append(kwargs)
+        return SimpleNamespace(frame=raw)
+
+    monkeypatch.setattr(ingest_module, "fetch_openml", fake_fetch_openml)
+    assert ingest_module.download() is raw
+    # The dataset id and parsing options must not drift (ADR-0001).
+    assert calls == [{"data_id": 41214, "as_frame": True, "parser": "pandas"}]
+ 
