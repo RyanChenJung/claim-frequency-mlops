@@ -388,7 +388,7 @@ dev = [
     { name = "ruff" },
 ]
 trainer = [
-    { name = "dvc", extras = ["s3"], specifier = ">=3" },
+    { name = "dvc", extras = ["s3"], specifier = ">=3,<4" },
     { name = "mlflow", specifier = "==3.18.0" },
     { name = "skops", specifier = ">=0.16.0" },
 ]
