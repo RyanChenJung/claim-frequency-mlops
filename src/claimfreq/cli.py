@@ -107,6 +107,24 @@ def _fake_data(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _make_drift(args: argparse.Namespace) -> int:
+    """Write all five drift scenario files from the test split, and print their effects."""
+    # Imported here so `--help` and the stubs stay fast and need no pandas.
+    from claimfreq.make_drift import EffectSizeError, make_drift
+
+    try:
+        written, effects = make_drift()
+    except EffectSizeError as error:
+        # A scenario too weak to trip its monitoring check is a failed check (exit 10).
+        print(error, file=sys.stderr)
+        return EXIT_CHECK_FAILED
+    for out, n_rows in written.items():
+        print(f"make-drift: wrote {n_rows} policies to {out}")
+    measured = ", ".join(f"{name}={value:.3f}" for name, value in effects.items())
+    print(f"make-drift: effects {measured}")
+    return EXIT_OK
+
+
 def _train(args: argparse.Namespace) -> int:
     """Train every candidate and log one parent MLflow run with a child run per candidate."""
     # Imported here so `--help` and the stubs stay fast and need no mlflow.
@@ -228,7 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
     add(
         "make-drift",
         "Read splits/test.parquet and write all five drift/<scenario>.parquet files.",
-        _not_implemented(ROLE_DATA),
+        _make_drift,
     )
 
     # Role B (Modeling): Airflow tasks, plus promote (run by a human).

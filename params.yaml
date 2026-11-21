@@ -7,13 +7,20 @@
 
 seed: 42                    # data seed: used only by split and make-drift
 
-# Role A (Data). Role A adds its own `drift:` section later.
+# Role A (Data)
 split:
   test_fraction: 0.2        # fraction of the full dataset
   validation_fraction: 0.1  # fraction of the full dataset; train gets the remaining 0.7
 clean:
   claim_nb_cap: 4           # ClaimNb above this is clipped
   exposure_cap: 1.0         # Exposure above this (years) is clipped
+drift:                      # make-drift knobs; minimum effect sizes are checked at run time
+  portfolio_shift:          # weighted sampling toward young drivers in dense areas
+    sample_fraction: 0.5    # share of the test split kept, without replacement
+    age_weight: 1.5         # weight on minus the standardized DrivAge
+    density_weight: 1.0     # weight on the standardized log Density
+  concept_drift:
+    claim_multiplier: 1.5   # claim rate multiplier, before clipping to clean.claim_nb_cap
 
 # Role B (Modeling)
 training:
