@@ -26,8 +26,6 @@ from claimfreq.fakes import make_policies
 # a command, it removes that command's entries here (docs/contracts.md, Develop against fakes).
 STUBS = [
     (["make-drift"], "Role A"),
-    (["register"], "Role B"),
-    (["promote", "--version", "2"], "Role B"),
     (["evaluate-test"], "Role B"),
     (["send-traffic", "--source", "test"], "Role A"),
     (["send-traffic", "--source", "concept_drift", "--batch-id", "run-1"], "Role A"),
