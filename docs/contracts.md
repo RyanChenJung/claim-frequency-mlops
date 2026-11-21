@@ -410,3 +410,4 @@ Then, per role:
 
    `uv sync` installs every dependency group (`dev`, `trainer`, `api`). All three checks must pass before you open a PR.
 3. CI runs the same checks after `uv sync --locked --all-groups`, which also fails if `uv.lock` is out of date.
+4. After changing dependencies, run `uv lock`, then `uv export --no-dev --no-hashes -o requirements.txt`. On rebase conflicts in `uv.lock`, re-run both instead of hand-merging.
