@@ -32,7 +32,59 @@ Predict annual claim frequency (`ClaimNb / Exposure`) from driver, vehicle, and 
 | Serving | FastAPI in Docker | <http://localhost:8000/docs> |
 | Monitoring | Evidently | <http://localhost:8001> |
 
-The architecture diagram is tracked in [#24](https://github.com/RyanChenJung/claim-frequency-mlops/issues/24).
+## Architecture
+
+Every pipeline step is a `claimfreq` command in the `trainer` image ([ADR-0003](docs/adr/0003-airflow-with-docker-operator.md)). Airflow runs those commands with DockerOperator. Humans only promote a model and run the final test evaluation ([ADR-0007](docs/adr/0007-semver-and-human-promotion.md)).
+
+```mermaid
+flowchart LR
+    openml[("OpenML 41214")]
+    subgraph dvc["DVC stages: dvc.yaml / dvc.lock (Role A)"]
+        ingest["ingest"] --> clean["clean"] --> split["split"] --> drift["make-drift<br/>5 drift scenarios"]
+    end
+    openml --> ingest
+    dvc -- "dvc push / pull" --> dagshub[("DagsHub remote")]
+
+    subgraph airflow["Airflow (Role C)"]
+        tdag["training DAG<br/>dvc_repro → train → register"]
+        mdag["monitor DAG<br/>monitor → retrain_on_drift"]
+    end
+    image[["trainer image<br/>claimfreq CLI"]]
+    tdag -- DockerOperator --> image
+    mdag -- DockerOperator --> image
+    image -. "dvc_repro" .-> dvc
+    split -- "splits/train, validation" --> image
+
+    subgraph mlflow["MLflow tracking and registry"]
+        runs[("experiment claim-frequency<br/>train: constant, GLM, LightGBM, FLAML")]
+        registry[("registry claim-frequency<br/>@challenger, @champion")]
+    end
+    image -- "train: runs, metrics, models" --> runs
+    image -- "register: version + reference dataset" --> registry
+    human(["human"]) -- "promote --version N<br/>evaluate-test" --> registry
+
+    subgraph serving["Serving and monitoring (Role D)"]
+        api["FastAPI api<br/>/predict /health /model-info"]
+        pg[("Postgres monitoring DB<br/>prediction_log, rejected_request_log,<br/>ground_truth")]
+        evidently["Evidently UI"]
+        alert["alert: red task,<br/>Discord webhook if set"]
+    end
+    registry -- "loads @champion at startup" --> api
+    traffic["send-traffic<br/>test or drift file"] -- "POST /predict" --> api
+    split -- "splits/test" --> traffic
+    drift --> traffic
+    api -- logs --> pg
+    traffic -- "writes ground_truth" --> pg
+    pg -- "monitor reads the window" --> image
+    registry -- "champion's reference dataset" --> image
+    image -- "monitor: snapshots" --> evidently
+    image -- "monitor: exit 10" --> alert
+    alert -. "retrain_on_drift: trigger" .-> tdag
+```
+
+- **Data path.** `dvc repro` rebuilds the splits and drift files from OpenML; `dvc pull` fetches the same versions from DagsHub.
+- **Training and registry.** The `training` DAG runs `dvc_repro → train → register`. `register` only produces a `challenger`. Moving `champion` is a human `promote`, after which the API is restarted to serve it.
+- **Serving and monitoring.** The API logs every prediction and every rejected request. `send-traffic` replays a file and then writes its delayed `ground_truth`. The `monitor` DAG compares that window with the champion's reference dataset, pushes snapshots to the Evidently UI, and fails (exit 10) when a check fails. Only then may it trigger the `training` DAG, which again ends at a new challenger.
 
 ## Run it locally
 
