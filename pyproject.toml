@@ -10,7 +10,11 @@ requires-python = ">=3.12,<3.13"
 # outside this project (ADR-0003).
 dependencies = [
     "numpy",
-    "pandas>=3",
+    # Below 3.1: pandas 3.1 removed pandas.core.dtypes.common.infer_dtype_from_object, which
+    # evidently 0.7.23 (the monitor's library, #20) imports, so `import evidently` fails
+    # (https://github.com/evidentlyai/evidently/issues/1974). Drop the cap in the same PR that
+    # raises evidently's lower bound to the first release with the fix.
+    "pandas>=3,<3.1",
     "psycopg[binary]",  # PostgreSQL driver for MONITORING_DB_URL, needed by both images
     "pyarrow",
     "pydantic>=2",
