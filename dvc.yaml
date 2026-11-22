@@ -1,0 +1,55 @@
+# The data pipeline: ingest -> clean -> split -> make-drift (docs/contracts.md, DAGs; ADR-0004).
+# Paths assume the default DATA_DIR=data; leave DATA_DIR unset when running `dvc repro`.
+# Each stage lists the code it runs and contracts/schema.py, which every stage validates against
+# (ingest also sets the raw dtypes from it), so a schema change re-runs the pipeline. `params`
+# lists the params.yaml sections each stage reads; tests/test_dvc_yaml.py guards this file.
+stages:
+  ingest:
+    cmd: claimfreq ingest
+    deps:
+      - src/claimfreq/ingest.py
+      - src/claimfreq/contracts/schema.py
+    outs:
+      - data/raw/freMTPL2freq.parquet
+  clean:
+    cmd: claimfreq clean
+    deps:
+      - data/raw/freMTPL2freq.parquet
+      - src/claimfreq/clean.py
+      - src/claimfreq/contracts/schema.py
+    params:
+      - clean
+    outs:
+      - data/processed/policies.parquet
+  split:
+    cmd: claimfreq split
+    deps:
+      - data/processed/policies.parquet
+      - src/claimfreq/split.py
+      - src/claimfreq/contracts/schema.py
+    params:
+      - seed
+      - split
+      - clean
+    # Three separate file outs, not a splits/ directory out, so dvc.lock records the plain
+    # content md5 of train.parquet that the model's data_hash tag carries (model.file_md5).
+    outs:
+      - data/splits/train.parquet
+      - data/splits/validation.parquet
+      - data/splits/test.parquet
+  make-drift:
+    cmd: claimfreq make-drift
+    deps:
+      - data/splits/test.parquet
+      - src/claimfreq/make_drift.py
+      - src/claimfreq/contracts/schema.py
+    params:
+      - seed
+      - drift
+      - clean
+    outs:
+      - data/drift/schema_break.parquet
+      - data/drift/out_of_bounds.parquet
+      - data/drift/column_swap.parquet
+      - data/drift/portfolio_shift.parquet
+      - data/drift/concept_drift.parquet
