@@ -2,14 +2,14 @@
 
 ``make-drift`` reads the test split, ``splits/test.parquet``, and writes one corrupted copy per
 drift scenario to ``drift/<scenario>.parquet`` under ``DATA_DIR`` (docs/contracts.md, Drift
-files). Each scenario simulates a production failure that one monitoring check must catch:
+files). Each scenario simulates a production failure that the monitoring checks must catch:
 
 - ``schema_break``: ``DrivAge`` renamed to ``DriverAge``. The API rejects it (422).
 - ``out_of_bounds``: ``DrivAge = 250`` and ``BonusMalus = -1`` on every row. Rejected (422).
 - ``column_swap``: ``VehAge`` and ``VehPower`` swapped where both values stay valid. Data drift.
 - ``portfolio_shift``: weighted sampling toward young drivers in dense areas. Data drift and
   prediction drift.
-- ``concept_drift``: the same policies with extra claims. Calibration.
+- ``concept_drift``: the same policies with extra claims. Calibration and live deviance.
 
 Every file keeps ``IDpol``, ``ClaimNb``, and ``Exposure``. The two random scenarios use the
 top-level data ``seed``, each with its own generator, so changing one scenario's knobs in
@@ -43,11 +43,11 @@ VALID_SCENARIOS = (
     DriftScenario.CONCEPT_DRIFT,
 )
 
-# Minimum effect sizes, so each scenario trips its monitoring check (docs/contracts.md).
+# Minimum effect sizes, so each scenario trips its monitoring checks (docs/contracts.md).
 MIN_EFFECTS: dict[str, float] = {
     "age_drop_years": 5.0,  # portfolio_shift: mean DrivAge at least 5 years lower
     "density_median_increase": 0.50,  # portfolio_shift: median Density at least 50% higher
-    "claim_rate_increase": 0.25,  # concept_drift: claim rate at least 25% higher
+    "claim_rate_increase": 0.40,  # concept_drift: claim rate at least 40% higher
 }
 
 

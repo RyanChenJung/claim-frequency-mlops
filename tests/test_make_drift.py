@@ -50,6 +50,15 @@ def data_dir(tmp_path, monkeypatch, holdout):
     return tmp_path
 
 
+def test_minimum_effects_are_the_contract_numbers():
+    # Pinned here, so lowering a minimum in make_drift.py fails a test (docs/contracts.md).
+    assert MIN_EFFECTS == {
+        "age_drop_years": 5.0,
+        "density_median_increase": 0.50,
+        "claim_rate_increase": 0.40,
+    }
+
+
 def test_schema_break_renames_only_drivage(holdout, scenarios):
     broken = scenarios[DriftScenario.SCHEMA_BREAK]
     expected = ["DriverAge" if c == "DrivAge" else c for c in schema.FRAME_COLUMNS]
