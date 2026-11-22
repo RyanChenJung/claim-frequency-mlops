@@ -11,6 +11,7 @@ so nothing really waits.
 """
 
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 
@@ -21,6 +22,7 @@ from pydantic import ValidationError
 from sqlalchemy import insert
 
 from claimfreq import send_traffic as send_traffic_module
+from claimfreq.cli import EXIT_ERROR, EXIT_OK, main
 from claimfreq.contracts import logs, paths, schema
 from claimfreq.contracts.api import (
     MAX_BATCH_ID_LENGTH,
@@ -316,3 +318,48 @@ def test_makes_and_closes_its_own_client_for_api_url(holdout, api, monkeypatch, 
 
     assert str(clients[0].base_url) == "http://api.test:8000"
     assert clients[0].is_closed
+
+
+@pytest.fixture
+def cli_api(holdout, api, monkeypatch) -> FakeAPI:
+    """Route the CLI's own client to the fake API; return the fake."""
+    transport = httpx.MockTransport(api)
+    monkeypatch.setattr(
+        send_traffic_module,
+        "make_client",
+        lambda base_url: httpx.Client(transport=transport, base_url=base_url),
+    )
+    return api
+
+
+def test_cli_send_traffic_prints_the_counts_and_exits_0(cli_api, capsys):
+    # params.yaml's traffic.batch_size is 100, so the 250 fake policies make 3 batches.
+    assert main(["send-traffic", "--source", "test", "--batch-id", "cli-1"]) == EXIT_OK
+
+    out = capsys.readouterr().out
+    assert f"send-traffic: {N_ROWS} policies from " in out
+    assert "batch_id=cli-1" in out
+    assert (
+        "send-traffic: 3 batches (3 scored with HTTP 200, 0 rejected with HTTP 422); "
+        f"{N_ROWS} policies scored, 0 rejected; {N_ROWS} ground_truth rows"
+    ) in out
+    assert len(cli_api.table("ground_truth")) == N_ROWS
+
+
+def test_cli_send_traffic_defaults_the_batch_id_and_exits_0_on_422(cli_api, capsys):
+    assert main(["send-traffic", "--source", "schema_break"]) == EXIT_OK
+
+    out = capsys.readouterr().out
+    assert re.search(r"batch_id=schema_break-\d{8}T\d{6}Z,", out)
+    assert "3 batches (0 scored with HTTP 200, 3 rejected with HTTP 422)" in out
+
+
+def test_cli_send_traffic_exits_1_with_the_message_and_no_traceback(cli_api, capsys):
+    cli_api.log = False
+
+    assert main(["send-traffic", "--source", "test"]) == EXIT_ERROR
+
+    err = capsys.readouterr().err
+    assert err.startswith("send-traffic: error: ground_truth write failed")
+    assert "MONITORING_DB_URL" in err
+    assert "Traceback" not in err
