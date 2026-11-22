@@ -6,11 +6,13 @@ nothing is read from or written into the repository's ``data/``.
 
 import pandas as pd
 import pytest
+from pydantic import ValidationError
 
 from claimfreq import make_drift as make_drift_module
 from claimfreq.cli import EXIT_CHECK_FAILED, EXIT_OK, main
 from claimfreq.contracts import paths, schema
 from claimfreq.contracts.params import (
+    CleanParams,
     ConceptDriftParams,
     DriftParams,
     Params,
@@ -170,16 +172,57 @@ def test_the_same_seed_gives_the_same_files(holdout, scenarios):
     other = build_scenarios(holdout, Params(seed=7))
     shift = DriftScenario.PORTFOLIO_SHIFT
     assert set(other[shift][ID]) != set(scenarios[shift][ID])
+    concept = DriftScenario.CONCEPT_DRIFT
+    assert not other[concept].equals(scenarios[concept])
 
 
-def test_cli_make_drift_writes_all_five_files(data_dir, capsys):
+def test_each_random_scenario_has_its_own_generator(holdout, scenarios):
+    # Changing one scenario's knobs leaves the other scenario's file unchanged.
+    shift, concept = DriftScenario.PORTFOLIO_SHIFT, DriftScenario.CONCEPT_DRIFT
+    fewer = Params(drift=DriftParams(portfolio_shift=PortfolioShiftParams(sample_fraction=0.3)))
+    pd.testing.assert_frame_equal(build_scenarios(holdout, fewer)[concept], scenarios[concept])
+    more = Params(drift=DriftParams(concept_drift=ConceptDriftParams(claim_multiplier=2.0)))
+    pd.testing.assert_frame_equal(build_scenarios(holdout, more)[shift], scenarios[shift])
+
+
+def test_concept_drift_clips_to_the_clean_cap(holdout):
+    claims = schema.CLAIM_NB
+    capped = Params(clean=CleanParams(claim_nb_cap=1))
+    assert build_scenarios(holdout, capped)[DriftScenario.CONCEPT_DRIFT][claims].max() == 1
+    # With the default cap some policies have more than 1 claim, so the cap of 1 really binds.
+    assert build_scenarios(holdout, Params())[DriftScenario.CONCEPT_DRIFT][claims].max() > 1
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        {"portfolio_shift": {"sample_fraction": 0}},  # above 0
+        {"portfolio_shift": {"sample_fraction": 1.0}},  # below 1, or nothing shifts
+        {"portfolio_shift": {"sample_fraction": True}},  # YAML true is not a float
+        {"portfolio_shift": {"age_weight": -0.5}},  # at least 0
+        {"portfolio_shift": {"density_weight": "1.0"}},  # a quoted string is not a float
+        {"portfolio_shift": {"sample_fractoin": 0.4}},  # typo in a key
+        {"concept_drift": {"claim_multiplier": 1.0}},  # above 1, or no claims are added
+        {"label_drift": {}},  # unknown scenario
+    ],
+)
+def test_invalid_drift_params_are_rejected(drift):
+    with pytest.raises(ValidationError):
+        Params.model_validate({"drift": drift})
+
+
+def test_cli_make_drift_writes_all_five_files(data_dir, holdout, capsys):
     assert main(["make-drift"]) == EXIT_OK
     out = capsys.readouterr().out
     assert "make-drift: effects age_drop_years=" in out
+    # The same params the command read (params.yaml at the repo root).
+    expected = build_scenarios(holdout, make_drift_module.load_params())
     for scenario in DriftScenario:
         path = data_dir / paths.DRIFT_DIR / f"{scenario}.parquet"
         written = pd.read_parquet(path)
         assert f"wrote {len(written)} policies to {path}" in out
+        # Each file holds its own scenario, so swapped file names fail.
+        pd.testing.assert_frame_equal(written, expected[scenario])
         if scenario in make_drift_module.VALID_SCENARIOS:
             assert {c: str(written[c].dtype) for c in written} == schema.DTYPES
             schema.validate_frame(written, "clean")
