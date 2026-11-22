@@ -70,13 +70,13 @@ Fill in `.env`. Git ignores it, so never put these values in an issue or PR:
   - `AIRFLOW_JWT_SECRET`: the output of `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`.
 - On Linux only, set `AIRFLOW_UID` to the output of `id -u`.
 
-### 3. Build the data ⏳ [#12](https://github.com/RyanChenJung/claim-frequency-mlops/issues/12)
+### 3. Build the data
 
 ```bash
 uv run dvc repro
 ```
 
-This downloads OpenML 41214 and runs `ingest → clean → split → make-drift`. Graders need no account for it.
+This downloads OpenML 41214 and runs `ingest → clean → split → make-drift`, the stages in `dvc.yaml`. Graders need no account for it: DagsHub denies anonymous reads even on public repositories ([ADR-0004](docs/adr/0004-dvc-with-dagshub-remote.md)), so `dvc repro` rebuilds every file from the public source instead of pulling it. A second `uv run dvc repro` skips all four stages as unchanged.
 
 Teammates with DagsHub access can instead fetch the versioned data with `uv run dvc pull`, after setting their token ([#13](https://github.com/RyanChenJung/claim-frequency-mlops/issues/13)).
 
@@ -138,7 +138,7 @@ docker compose exec airflow-scheduler airflow dags trigger monitor --conf '{"bat
 
 The `monitor` run should succeed (green in Airflow), and the Evidently UI at <http://localhost:8001> shows the snapshot.
 
-### 9. A drift scenario: the alert fires ⏳ [#11](https://github.com/RyanChenJung/claim-frequency-mlops/issues/11), [#30](https://github.com/RyanChenJung/claim-frequency-mlops/issues/30)
+### 9. A drift scenario: the alert fires ⏳ [#30](https://github.com/RyanChenJung/claim-frequency-mlops/issues/30)
 
 ```bash
 docker compose run --rm trainer claimfreq send-traffic --source column_swap --batch-id column_swap-1
