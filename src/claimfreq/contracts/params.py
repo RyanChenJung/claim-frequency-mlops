@@ -78,7 +78,7 @@ class PortfolioShiftParams(_Section):
     """
 
     # Share of the test split kept. Below 1, or the sample would be the whole split, unshifted.
-    sample_fraction: float = Field(default=0.5, strict=True, gt=0, lt=1)
+    sample_fraction: float = Field(default=0.4, strict=True, gt=0, lt=1)
     # Larger values favour younger drivers more strongly.
     age_weight: float = Field(default=1.5, strict=True, ge=0)
     # Larger values favour denser areas more strongly (on the log scale: Density spans 1-27,000).

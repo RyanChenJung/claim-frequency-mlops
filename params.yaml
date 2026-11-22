@@ -16,7 +16,7 @@ clean:
   exposure_cap: 1.0         # Exposure above this (years) is clipped
 drift:                      # make-drift knobs; minimum effect sizes are checked at run time
   portfolio_shift:          # weighted sampling toward young drivers in dense areas
-    sample_fraction: 0.5    # share of the test split kept, without replacement
+    sample_fraction: 0.4    # share of the test split kept, without replacement
     age_weight: 1.5         # weight on minus the standardized DrivAge
     density_weight: 1.0     # weight on the standardized log Density
   concept_drift:
