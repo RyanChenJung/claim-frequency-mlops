@@ -10,10 +10,15 @@ import pytest
 from claimfreq import make_drift as make_drift_module
 from claimfreq.cli import EXIT_CHECK_FAILED, EXIT_OK, main
 from claimfreq.contracts import paths, schema
-from claimfreq.contracts.params import ConceptDriftParams, DriftParams, Params
+from claimfreq.contracts.params import (
+    ConceptDriftParams,
+    DriftParams,
+    Params,
+    PortfolioShiftParams,
+)
 from claimfreq.contracts.paths import DriftScenario
 from claimfreq.fakes import make_policies
-from claimfreq.make_drift import MIN_EFFECTS, build_scenarios, check_effects
+from claimfreq.make_drift import MIN_EFFECTS, EffectSizeError, build_scenarios, check_effects
 
 N_ROWS = 10_000
 ID = schema.ID_COLUMN
@@ -115,6 +120,36 @@ def test_concept_drift_only_adds_claims_and_meets_its_effect_size(holdout, scena
 
     effects = check_effects(holdout, scenarios)
     assert effects["claim_rate_increase"] >= MIN_EFFECTS["claim_rate_increase"]
+
+
+def test_effects_are_measured_as_the_contract_states(holdout, scenarios):
+    # An independent measurement, so check_effects is not its own oracle.
+    def rate(df):
+        return df["ClaimNb"].sum() / df["Exposure"].sum()
+
+    shifted = scenarios[DriftScenario.PORTFOLIO_SHIFT]
+    concept = scenarios[DriftScenario.CONCEPT_DRIFT]
+    expected = {
+        "age_drop_years": holdout["DrivAge"].mean() - shifted["DrivAge"].mean(),
+        "density_median_increase": shifted["Density"].median() / holdout["Density"].median() - 1,
+        "claim_rate_increase": rate(concept) / rate(holdout) - 1,
+    }
+    assert check_effects(holdout, scenarios) == pytest.approx(expected)
+
+
+def test_weak_portfolio_knobs_raise(holdout):
+    weak = Params(
+        drift=DriftParams(portfolio_shift=PortfolioShiftParams(age_weight=0.0, density_weight=0.0))
+    )
+    with pytest.raises(EffectSizeError) as error:
+        check_effects(holdout, build_scenarios(holdout, weak))
+    assert "age_drop_years" in str(error.value)
+    assert "density_median_increase" in str(error.value)
+
+
+def test_sample_fraction_sets_the_row_count(holdout):
+    params = Params(drift=DriftParams(portfolio_shift=PortfolioShiftParams(sample_fraction=0.3)))
+    assert len(build_scenarios(holdout, params)[DriftScenario.PORTFOLIO_SHIFT]) == 3_000
 
 
 def test_the_same_seed_gives_the_same_files(holdout, scenarios):
