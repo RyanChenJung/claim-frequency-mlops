@@ -152,6 +152,17 @@ def test_sample_fraction_sets_the_row_count(holdout):
     assert len(build_scenarios(holdout, params)[DriftScenario.PORTFOLIO_SHIFT]) == 3_000
 
 
+def test_an_empty_portfolio_sample_fails_the_gate(holdout):
+    # 0.000001 of 10,000 rows rounds to 0, so both portfolio_shift effects are NaN.
+    params = Params(drift=DriftParams(portfolio_shift=PortfolioShiftParams(sample_fraction=1e-6)))
+    scenarios = build_scenarios(holdout, params)
+    assert len(scenarios[DriftScenario.PORTFOLIO_SHIFT]) == 0
+    with pytest.raises(EffectSizeError) as error:
+        check_effects(holdout, scenarios)
+    assert "age_drop_years: nan" in str(error.value)
+    assert "density_median_increase: nan" in str(error.value)
+
+
 def test_the_same_seed_gives_the_same_files(holdout, scenarios):
     again = build_scenarios(holdout, Params())
     for scenario, frame in scenarios.items():

@@ -165,7 +165,8 @@ def check_effects(
     problems = [
         f"{name}: {effects[name]:.3f}, minimum {minimum}"
         for name, minimum in MIN_EFFECTS.items()
-        if effects[name] < minimum
+        # Written as "not >=" so a NaN effect (e.g. an empty portfolio_shift sample) also fails.
+        if not effects[name] >= minimum
     ]
     if problems:
         lines = "\n".join(f"- {problem}" for problem in problems)
