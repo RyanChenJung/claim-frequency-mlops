@@ -203,9 +203,9 @@ Each scenario must fail a specific check:
 
 [`params.yaml`](../params.yaml) holds every tunable value and is tracked by DVC as stage params. `load_params()` validates it.
 
-- **Ownership.** Each section belongs to one role: `split` and `clean` to A, `training` to B, `traffic` and `monitor` to D. A role may add or change keys inside its own section in its own PR. That PR updates `Params` (`params.py`), `params.yaml`, and the table below together.
+- **Ownership.** Each section belongs to one role: `split`, `clean`, and `drift` to A, `training` to B, `traffic` and `monitor` to D. A role may add or change keys inside its own section in its own PR. That PR updates `Params` (`params.py`), `params.yaml`, and the table below together.
 - **Contract keys.** Keys read by more than one role, and the top-level `seed`, are contract changes ([Changing a contract](#changing-a-contract)).
-- Role A will add its own `drift:` section later, under the same rule.
+- Role A's `drift:` section holds the `make-drift` knobs. `make-drift` checks the [minimum effect sizes](#drift-files) at run time and exits 10 when a knob is too weak.
 - `params.yaml` sets every key explicitly. A test checks that every field of `Params` appears in the file; it does not pin the values.
 - Validation is strict: unknown keys are rejected, and integer, float, and boolean fields do not convert types (`true` is not 1, `1` is not `true`, `4.0` is not 4, `"0.2"` is not 0.2). A float field still accepts a YAML integer such as `1`.
 - Seeds are integers from 0 to 2^32 − 1. `fake-data --seed` accepts the same range.
@@ -213,7 +213,7 @@ Each scenario must fail a specific check:
 | Section | Owner | Keys (shipped values) |
 |---|---|---|
 | `seed` (top level) | contract | `seed: 42`, the data seed: used only by `split` and `make-drift` |
-| `split`, `clean` | A | `test_fraction: 0.2`, `validation_fraction: 0.1` (of the full dataset); `claim_nb_cap: 4`, `exposure_cap: 1.0` |
+| `split`, `clean`, `drift` | A | `test_fraction: 0.2`, `validation_fraction: 0.1` (of the full dataset); `claim_nb_cap: 4`, `exposure_cap: 1.0`; `drift:` `portfolio_shift:` `sample_fraction: 0.4` (share of the test split kept, sampled without replacement), `age_weight: 1.5` and `density_weight: 1.0` (weights on minus the standardized `DrivAge` and on the standardized log `Density`); `concept_drift:` `claim_multiplier: 1.5` (claim rate multiplier, before clipping to `claim_nb_cap`) |
 | `training` | B | `selection_metric: poisson_deviance` (one of the metric names), `flaml_time_budget_s: 300`, `seed: 42` (the model seed); `glm:` `alpha: 0.0001`, `max_iter: 1000`, `solver: newton-cholesky` (`lbfgs` or `newton-cholesky`), `drivage_edges: [21, 25, 30, 40, 50, 60, 70]` (left edges of the DrivAge bands after 18; strictly increasing), `vehage_bins: 10` (VehAge quantile bins; at least 2) |
 | `traffic` | D | `batch_size: 100` |
 | `monitor` | D | `min_predictions: 200` (fewest predictions in the window for the data and prediction drift checks to run; at least 1), `drift_share_max: 0.2` (fail when the share of drifted rating factors is ≥ this value, so 2 of 9 ≈ 0.22 fails), `fail_on_prediction_drift: true`, `calibration_min: 0.9`, `calibration_max: 1.1`, `live_deviance_max_ratio: 1.2`, `rejection_rate_max: 0.05` |
@@ -363,7 +363,7 @@ When you implement a command, remove its entries from `STUBS` in [`tests/test_cl
 
 Then, per role:
 
-- **A. Data.** Implement `ingest` first. Download OpenML 41214, strip the quotes from `VehGas`, and select columns by name. Then run `validate_frame(df, "raw")` on the frame as read (its float `IDpol` and `ClaimNb` pass, being whole numbers) and `coerce_frame` before writing `raw/freMTPL2freq.parquet`. Continue with `clean`, `split`, and `make-drift`; the fake policies show what a valid clean frame looks like. `make_policies` produces clean-stage frames only, so A owns any raw-stage fake it needs for testing ingest. A also owns the future `drift:` section of `params.yaml`. Last, implement `send-traffic`, which replays your test and drift files through Role D's API; test it against a stub HTTP server until Role D's app lands:
+- **A. Data.** Implement `ingest` first. Download OpenML 41214, strip the quotes from `VehGas`, and select columns by name. Then run `validate_frame(df, "raw")` on the frame as read (its float `IDpol` and `ClaimNb` pass, being whole numbers) and `coerce_frame` before writing `raw/freMTPL2freq.parquet`. Continue with `clean`, `split`, and `make-drift`; the fake policies show what a valid clean frame looks like. `make_policies` produces clean-stage frames only, so A owns any raw-stage fake it needs for testing ingest. A also owns the `drift:` section of `params.yaml`. Last, implement `send-traffic`, which replays your test and drift files through Role D's API; test it against a stub HTTP server until Role D's app lands:
 
   ```bash
   uv run claimfreq fake-data --rows 10000 --seed 3 --id-start 900000 --out data/fake/splits/test.parquet

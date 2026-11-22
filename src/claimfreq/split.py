@@ -45,7 +45,8 @@ def split_policies(df: pd.DataFrame, params: Params) -> dict[str, pd.DataFrame]:
     """Deal ``df`` into train, validation, and test frames, stratified on having a claim.
 
     Args:
-        df: A clean-stage policy frame with a unique index (``read_parquet`` gives one).
+        df: A clean-stage policy frame, in any row order and with any index (it is sorted by
+            ``IDpol`` and re-indexed first).
         params: Only ``params.split`` (the fractions) and ``params.seed`` are used.
 
     Returns:
