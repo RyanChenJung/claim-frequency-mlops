@@ -20,6 +20,7 @@ Predict annual claim frequency (`ClaimNb / Exposure`) from driver, vehicle, and 
 
 - Source: [OpenML dataset 41214](https://www.openml.org/d/41214) (`freMTPL2freq`), CC0 license, 678,013 policies, 12 columns.
 - OpenML 41214 contains the same 678,013 policies (identical `IDpol` set and order) with identical `ClaimNb` and rating factors as the [Kaggle copy](https://www.kaggle.com/datasets/karansarpal/fremtpl2-french-motor-tpl-insurance-claims) named in our proposal; both derive from the pre-2022 [CASdatasets](https://github.com/dutangc/CASdatasets) `freMTPL2freq`. Differences: OpenML encodes `Region` as INSEE codes (`R11`–`R94`), while the Kaggle copy uses region names and merges R41 (Lorraine) into "Nord-Pas-de-Calais"; Kaggle's `Exposure` is rounded to 9 decimals.
+- Datasheet and EDA: [docs/datasheet.md](docs/datasheet.md); plots and summary numbers in [docs/eda/](docs/eda/).
 
 ## Stack
 
