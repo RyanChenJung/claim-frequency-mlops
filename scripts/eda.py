@@ -297,7 +297,8 @@ def plot_frequency(train: pd.DataFrame, column: str, path: Path) -> Path:
     bars_ax.set_ylabel("Exposure (policy-years)")
     handles, labels = ax.get_legend_handles_labels()
     bar_handles, bar_labels = bars_ax.get_legend_handles_labels()
-    ax.legend(handles + bar_handles, labels + bar_labels, loc="upper right")
+    # Below the axes, so it never covers a point or a bar.
+    figure.legend(handles + bar_handles, labels + bar_labels, loc="outside lower center", ncols=3)
     ax.set_title(f"Observed claim frequency by {column} (train)")
     return _save(figure, path)
 
