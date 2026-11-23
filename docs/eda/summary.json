@@ -1,0 +1,257 @@
+{
+  "dataset": {
+    "claim_nb_capped_rows": 9,
+    "claim_nb_max_before_cap": 16,
+    "claimant_share": 0.0502,
+    "claims_after_cap": 36056,
+    "claims_before_cap": 36102,
+    "exposure_capped_rows": 1224,
+    "exposure_max_before_cap": 2.01,
+    "regions": 22,
+    "rows": 678013
+  },
+  "duplicates": {
+    "test_rows_matching_train": 0.297,
+    "train_rows_duplicated_within_train": 0.2965,
+    "validation_rows_matching_train": 0.2947
+  },
+  "train": {
+    "claim_counts": {
+      "0": 450767,
+      "1": 22536,
+      "2": 1238,
+      "3": 57,
+      "4": 11
+    },
+    "claim_nb_capped_rows": 6,
+    "claims": 25227,
+    "claims_per_exposure_year": 0.1006,
+    "exposure_capped_rows": 853,
+    "exposure_years": 250858.0567,
+    "frequency_by": {
+      "Area": [
+        {
+          "band": "A",
+          "claims": 3523,
+          "exposure": 43379.3013,
+          "frequency": 0.0812,
+          "policies": 72793
+        },
+        {
+          "band": "B",
+          "claims": 2703,
+          "exposure": 30163.5288,
+          "frequency": 0.0896,
+          "policies": 52861
+        },
+        {
+          "band": "C",
+          "claims": 6857,
+          "exposure": 73138.6511,
+          "frequency": 0.0938,
+          "policies": 134518
+        },
+        {
+          "band": "D",
+          "claims": 5892,
+          "exposure": 53931.2295,
+          "frequency": 0.1093,
+          "policies": 106060
+        },
+        {
+          "band": "E",
+          "claims": 5463,
+          "exposure": 44585.6697,
+          "frequency": 0.1225,
+          "policies": 95866
+        },
+        {
+          "band": "F",
+          "claims": 789,
+          "exposure": 5659.6763,
+          "frequency": 0.1394,
+          "policies": 12511
+        }
+      ],
+      "BonusMalus": [
+        {
+          "band": "50",
+          "claims": 12607,
+          "exposure": 157586.5153,
+          "frequency": 0.08,
+          "policies": 268726
+        },
+        {
+          "band": "51-59",
+          "claims": 2622,
+          "exposure": 27840.2562,
+          "frequency": 0.0942,
+          "policies": 54023
+        },
+        {
+          "band": "60-69",
+          "claims": 3003,
+          "exposure": 23877.6106,
+          "frequency": 0.1258,
+          "policies": 51225
+        },
+        {
+          "band": "70-79",
+          "claims": 1825,
+          "exposure": 13769.0956,
+          "frequency": 0.1325,
+          "policies": 31455
+        },
+        {
+          "band": "80-89",
+          "claims": 1483,
+          "exposure": 10796.5016,
+          "frequency": 0.1374,
+          "policies": 26067
+        },
+        {
+          "band": "90-99",
+          "claims": 1544,
+          "exposure": 10082.2679,
+          "frequency": 0.1531,
+          "policies": 23890
+        },
+        {
+          "band": "100-124",
+          "claims": 1802,
+          "exposure": 6195.5711,
+          "frequency": 0.2909,
+          "policies": 17629
+        },
+        {
+          "band": "125+",
+          "claims": 341,
+          "exposure": 710.2384,
+          "frequency": 0.4801,
+          "policies": 1594
+        }
+      ],
+      "DrivAge": [
+        {
+          "band": "18-20",
+          "claims": 453,
+          "exposure": 1815.8698,
+          "frequency": 0.2495,
+          "policies": 4813
+        },
+        {
+          "band": "21-24",
+          "claims": 1224,
+          "exposure": 6990.4863,
+          "frequency": 0.1751,
+          "policies": 16434
+        },
+        {
+          "band": "25-29",
+          "claims": 2070,
+          "exposure": 18004.9548,
+          "frequency": 0.115,
+          "policies": 41149
+        },
+        {
+          "band": "30-39",
+          "claims": 5098,
+          "exposure": 57650.9251,
+          "frequency": 0.0884,
+          "policies": 117960
+        },
+        {
+          "band": "40-49",
+          "claims": 6291,
+          "exposure": 61379.8662,
+          "frequency": 0.1025,
+          "policies": 116059
+        },
+        {
+          "band": "50-59",
+          "claims": 5484,
+          "exposure": 55771.2894,
+          "frequency": 0.0983,
+          "policies": 99610
+        },
+        {
+          "band": "60-69",
+          "claims": 2596,
+          "exposure": 28106.1323,
+          "frequency": 0.0924,
+          "policies": 47538
+        },
+        {
+          "band": "70+",
+          "claims": 2011,
+          "exposure": 21138.5329,
+          "frequency": 0.0951,
+          "policies": 31046
+        }
+      ],
+      "VehAge": [
+        {
+          "band": "0",
+          "claims": 3666,
+          "exposure": 11627.7312,
+          "frequency": 0.3153,
+          "policies": 40138
+        },
+        {
+          "band": "1",
+          "claims": 2022,
+          "exposure": 22900.6553,
+          "frequency": 0.0883,
+          "policies": 49948
+        },
+        {
+          "band": "2",
+          "claims": 1980,
+          "exposure": 20734.8181,
+          "frequency": 0.0955,
+          "policies": 41381
+        },
+        {
+          "band": "3-5",
+          "claims": 4673,
+          "exposure": 50399.9157,
+          "frequency": 0.0927,
+          "policies": 92736
+        },
+        {
+          "band": "6-10",
+          "claims": 6918,
+          "exposure": 69300.6923,
+          "frequency": 0.0998,
+          "policies": 120108
+        },
+        {
+          "band": "11-15",
+          "claims": 4584,
+          "exposure": 54607.3977,
+          "frequency": 0.0839,
+          "policies": 94056
+        },
+        {
+          "band": "16-20",
+          "claims": 1194,
+          "exposure": 17671.6136,
+          "frequency": 0.0676,
+          "policies": 30397
+        },
+        {
+          "band": "21+",
+          "claims": 190,
+          "exposure": 3615.2328,
+          "frequency": 0.0526,
+          "policies": 5845
+        }
+      ]
+    },
+    "full_year_share_after_cap": 0.2496,
+    "md5": "6ccf5987bb4772e6412c4469f9384454",
+    "mean_exposure_after_cap": 0.5286,
+    "rows": 474609,
+    "zero_claim_share": 0.9498
+  }
+}
