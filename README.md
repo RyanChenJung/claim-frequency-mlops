@@ -150,7 +150,7 @@ docker compose exec airflow-scheduler airflow dags trigger monitor --conf '{"bat
 - The Evidently dashboard shows the drifted rating factors.
 - If `ALERT_WEBHOOK_URL` is set, a Discord message names the failed checks.
 
-The other scenarios are `schema_break`, `out_of_bounds`, `portfolio_shift`, and `concept_drift`. [`docs/contracts.md`](docs/contracts.md#what-the-monitor-must-catch) lists which check each one must trip.
+The other scenarios are `schema_break`, `out_of_bounds`, `portfolio_shift`, and `concept_drift`. [`docs/contracts.md`](docs/contracts.md#what-the-monitor-must-catch) lists which checks each one must trip.
 
 ### 10. Stop
 
