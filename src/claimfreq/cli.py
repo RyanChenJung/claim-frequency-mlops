@@ -141,7 +141,7 @@ def _monitor(args: argparse.Namespace) -> int:
     from claimfreq.contracts import env
     from claimfreq.contracts.logs import create_all, make_engine
     from claimfreq.contracts.params import load_params
-    from claimfreq.monitoring import reference
+    from claimfreq.monitoring import publish, reference
     from claimfreq.monitoring.checks import run_checks
     from claimfreq.monitoring.window import Window, load_window
 
@@ -166,11 +166,38 @@ def _monitor(args: argparse.Namespace) -> int:
     report = run_checks(data, reference_frame, params)
     for check in report.checks:
         print(f"monitor: {check.line()}")
+
+    # Publishing must not hide a failed check, so its errors are collected, not raised.
+    publish_errors = []
+    if report.snapshot is None:
+        print("monitor: no Evidently snapshot, because the drift checks were skipped")
+    else:
+        try:
+            publish.push_snapshot(env.get(env.EVIDENTLY_UI_URL), report.snapshot, window)
+            print(f"monitor: pushed the snapshot to project {publish.EVIDENTLY_PROJECT!r}")
+        except Exception as error:
+            publish_errors.append(f"could not push the snapshot: {type(error).__name__}: {error}")
+
     if report.failed:
         names = ", ".join(check.name for check in report.failed)
         print(f"monitor: failed checks: {names}", file=sys.stderr)
+        webhook_url = env.get(env.ALERT_WEBHOOK_URL)
+        if webhook_url:
+            try:
+                publish.send_alert(webhook_url, publish.alert_message(report.failed, window))
+                print("monitor: sent the alert to ALERT_WEBHOOK_URL")
+            except Exception as error:
+                # The URL is a secret, so the message names the variable, never its value.
+                publish_errors.append(f"could not send the alert: {type(error).__name__}")
+        else:
+            print("monitor: ALERT_WEBHOOK_URL is not set, so the alert goes to this log only")
+
+    for message in publish_errors:
+        print(f"monitor: {message}", file=sys.stderr)
+    if report.failed:
+        # A failed check wins over a publishing error, so retraining still triggers.
         return EXIT_CHECK_FAILED
-    return EXIT_OK
+    return EXIT_ERROR if publish_errors else EXIT_OK
 
 
 # argparse types raise ArgumentTypeError: for any other error, argparse would print the
