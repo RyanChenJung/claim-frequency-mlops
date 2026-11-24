@@ -260,6 +260,25 @@ def test_values_are_posted_without_coercion(holdout, client, sleeps):
     assert counts.ground_truth_rows == 0
 
 
+def test_a_missing_value_is_posted_as_null_and_rejected(holdout, api, sleeps):
+    # A missing Area in the first row: that batch gets a 422, and the run goes on.
+    holdout.loc[0, "Area"] = None
+    holdout.to_parquet(paths.data_path(paths.TEST), index=False)
+    seen = []
+    with _recording(api, seen) as c:
+        counts = run("test", c, sleeps)
+    assert seen[0][0]["policies"][0]["Area"] is None
+    assert (counts.rejected_batches, counts.scored_batches) == (1, 2)
+
+
+def test_a_nan_in_a_float_column_is_rejected_not_a_crash(holdout, client, sleeps):
+    # One NaN turns DrivAge into floats: every batch gets a 422, with no encoding error.
+    holdout.loc[0, "DrivAge"] = float("nan")
+    holdout.to_parquet(paths.data_path(paths.TEST), index=False)
+    counts = run("test", client, sleeps)
+    assert counts.rejected_batches == 3
+
+
 def test_waits_for_health_and_counts_connection_errors_as_not_ready(holdout, api, client, sleeps):
     api.health = [503, httpx.ConnectError("refused"), 503]
 

@@ -104,11 +104,14 @@ def make_client(base_url: str) -> httpx.Client:
 def make_body(batch: pd.DataFrame, batch_id: str) -> dict[str, Any]:
     """Return the ``POST /predict`` body for one batch of rows, with the values as is.
 
-    ``to_dict`` and ``tolist`` give native Python values (int, float, str), which JSON can
-    carry; the API's strict fields then accept or reject them exactly as they are in the file.
+    Values become native Python ints, floats, and strs, and a missing value (NaN or None)
+    becomes JSON ``null``: httpx refuses to encode NaN, and ``null`` lets the API reject the
+    batch with a 422. The API's strict fields then accept or reject every value exactly as it
+    is in the file.
     """
     ids = batch[schema.ID_COLUMN].tolist()
-    features = batch.drop(columns=NOT_POSTED).to_dict("records")
+    frame = batch.drop(columns=NOT_POSTED).astype(object)
+    features = frame.where(frame.notna(), None).to_dict("records")
     policies = [{"policy_id": i, **f} for i, f in zip(ids, features, strict=True)]
     return {"batch_id": batch_id, "policies": policies}
 
