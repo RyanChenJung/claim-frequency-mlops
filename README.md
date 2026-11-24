@@ -67,7 +67,7 @@ Fill in `.env`. Git ignores it, so never put these values in an issue or PR:
 - For Airflow:
   - `HOST_REPO_DIR`: this folder's absolute path (the output of `pwd`).
   - `AIRFLOW_FERNET_KEY`: the output of `python3 -c "import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"`.
-  - `AIRFLOW_JWT_SECRET`: the output of `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`.
+  - `AIRFLOW_JWT_SECRET`: the output of `python3 -c "import secrets; print(secrets.token_urlsafe(64))"`.
 - On Linux only, set `AIRFLOW_UID` to the output of `id -u`.
 
 ### 3. Build the data
@@ -97,9 +97,11 @@ docker compose exec airflow-scheduler airflow dags unpause training
 docker compose exec airflow-scheduler airflow dags unpause monitor
 ```
 
+`unpause` and `pause` print the old `is_paused` value, even when they worked. To see the current state, run `docker compose exec airflow-scheduler airflow dags list` and read its `is_paused` column.
+
 From then on, `monitor` also runs by itself, once right away and then at every full hour, each time on all of the previous hour's traffic. So the batches you send in steps 8 and 9 are checked again at the next full hour, pooled with the rest of that hour's traffic. Like a manual run, a scheduled run that fails a check triggers `training`. Until `monitor` is implemented ([#20](https://github.com/RyanChenJung/claim-frequency-mlops/issues/20)), every one of these runs fails with exit 3.
 
-### 5. Train and register ⏳ [#14](https://github.com/RyanChenJung/claim-frequency-mlops/issues/14), [#15](https://github.com/RyanChenJung/claim-frequency-mlops/issues/15), [#16](https://github.com/RyanChenJung/claim-frequency-mlops/issues/16)
+### 5. Train and register ⏳ [#15](https://github.com/RyanChenJung/claim-frequency-mlops/issues/15), [#16](https://github.com/RyanChenJung/claim-frequency-mlops/issues/16)
 
 ```bash
 docker compose exec airflow-scheduler airflow dags trigger training
@@ -110,6 +112,8 @@ The `training` DAG runs `dvc_repro → train → register`. In MLflow, the candi
 ### 6. Promote and serve ⏳ [#15](https://github.com/RyanChenJung/claim-frequency-mlops/issues/15), [#17](https://github.com/RyanChenJung/claim-frequency-mlops/issues/17), [#22](https://github.com/RyanChenJung/claim-frequency-mlops/issues/22)
 
 Pick the version number `N` of the challenger in MLflow (Models → `claim-frequency`). Promotion is a human decision ([ADR-0007](docs/adr/0007-semver-and-human-promotion.md)). To compare the challenger with the champion, open the version's source run: `register` logs the comparison there as tags, against the version that was champion when it ran (`champion_version`). `beats_champion` is `true`, `false`, `no_champion`, or `incomparable` (the schema changed), and `champion_val_<metric>` is that champion re-scored on the same validation split.
+
+A later retrain on unchanged data (the same `data_hash` as the champion), such as the drift-triggered one in step 9, still registers a new version: MINOR if the winner's `algorithm` differs from the champion's, PATCH if not. It can also report `beats_champion` as `true` by a small margin. FLAML's search has a time budget, so each run can end with a slightly different model. A small margin on the same `data_hash` is noise, not an improvement.
 
 ```bash
 docker compose run --rm trainer claimfreq promote --version N
@@ -152,6 +156,14 @@ docker compose exec airflow-scheduler airflow dags trigger monitor --conf '{"bat
 
 The other scenarios are `schema_break`, `out_of_bounds`, `portfolio_shift`, and `concept_drift`. [`docs/contracts.md`](docs/contracts.md#what-the-monitor-must-catch) lists which checks each one must trip.
 
+When you are done with the scenarios, and the last `monitor` run has finished, pause `monitor`:
+
+```bash
+docker compose exec airflow-scheduler airflow dags pause monitor
+```
+
+Otherwise the scheduled run at the next full hour checks these batches again, pooled with the rest of that hour's traffic ([step 4](#4-start-the-services)). If that run fails too, it triggers `training` a second time: one more challenger, trained on the same data, and, if `ALERT_WEBHOOK_URL` is set, one more Discord message. The pause stays after `docker compose down`, so unpause `monitor` again (step 4) before the next demo.
+
 ### 10. Stop
 
 ```bash
@@ -165,12 +177,22 @@ docker compose --profile airflow down -v    # also deletes the data, for a fresh
 - **`Set AIRFLOW_FERNET_KEY, AIRFLOW_JWT_SECRET, and HOST_REPO_DIR in .env`**: `airflow-init` checks these before Airflow starts. See step 2.
 - **Port 5000 is taken on macOS**: that is the AirPlay Receiver, which is why MLflow is published on 5001.
 - **uv `required-version` error**: run `uv self update`.
+- **`password authentication failed` in `docker compose logs mlflow` after you change `POSTGRES_PASSWORD`**: Postgres sets the password only on the first start of an empty volume. Put the old value back, or start fresh with `docker compose --profile airflow down -v`. That deletes every MLflow run and model version, the Airflow history, and the prediction logs, but not `data/`.
 - **Airflow tasks fail with `permission denied` on `/var/run/docker.sock` (Linux)**: the socket belongs to the `docker` group. Add that group id to `airflow-scheduler` with `group_add` in `docker-compose.yml`.
 - **A task fails with exit code 3**: that command is still a stub, and the message names the role that owns it. Exit 10 means a check failed, and exit 1 an unexpected error ([contracts: exit codes](docs/contracts.md#cli--clipy)).
 
 ## Development
 
 Work on a branch per issue and open a PR with `Closes #N`. `main` is protected: CI (lint, format, tests, DAG validation, `requirements.txt` freshness, image builds) must be green to merge. The [dev setup](docs/contracts.md#dev-setup) and each role's [day-1 quickstart](docs/contracts.md#develop-against-fakes) are in the contracts.
+
+## AI assistance
+
+The course asks every submission to list its assisting sources, with the product name and version of any AI tool. Each team member lists their own:
+
+- **RyanChenJung (C. Platform)**: Claude Code 2.1.325 to 2.1.330 (Anthropic), with the model Claude Opus 5.5 (`claude-opus-5-5`). Used to draft code, tests, docs, and PR reviews, and to run verification checks. Ryan read and approved each change before it was committed or posted. Commits it helped write carry a `Co-Authored-By: Claude Opus 5.5` trailer.
+- **lx977 (A. Data)**: to be added.
+- **MarSmallK (B. Modeling)**: to be added.
+- **cyq01 (D. Serving and monitoring)**: to be added.
 
 ## License
 

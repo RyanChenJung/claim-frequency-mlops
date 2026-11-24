@@ -41,7 +41,7 @@ _Avoid_: using "baseline" for the monitoring reference
 The registered model version currently served to clients.
 
 **Challenger**:
-A newly registered model version that has been compared with the champion but not promoted.
+A newly registered model version that has been compared with the champion. It is never the current champion, but after a rollback it can be a version that was promoted before.
 
 **Promotion**:
 A human decision that makes a challenger the new champion.
