@@ -30,9 +30,6 @@ STUBS = [
     (["evaluate-test"], "Role B"),
     (["send-traffic", "--source", "test"], "Role A"),
     (["send-traffic", "--source", "concept_drift", "--batch-id", "run-1"], "Role A"),
-    (["monitor"], "Role D"),
-    (["monitor", "--since", "2026-11-18T00:00:00+00:00", "--until", "2026-11-19"], "Role D"),
-    (["monitor", "--batch-id", "column_swap-1"], "Role D"),
 ]
 # Every command of the CLI contract, stubbed or not.
 COMMANDS = {

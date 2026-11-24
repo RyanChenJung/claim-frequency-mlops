@@ -135,6 +135,44 @@ def _train(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _monitor(args: argparse.Namespace) -> int:
+    """Run the five checks on one window of the logs; exit 10 if any check that ran failed."""
+    # Imported here so `--help` and the stubs stay fast and need no pandas or Evidently.
+    from claimfreq.contracts import env
+    from claimfreq.contracts.logs import create_all, make_engine
+    from claimfreq.contracts.params import load_params
+    from claimfreq.monitoring import reference
+    from claimfreq.monitoring.checks import run_checks
+    from claimfreq.monitoring.window import Window, load_window
+
+    params = load_params().monitor
+    window = Window(since=args.since, until=args.until, batch_id=args.batch_id)
+    engine = make_engine(env.get(env.MONITORING_DB_URL))
+    try:
+        create_all(engine)
+        data = load_window(engine, window)
+    finally:
+        engine.dispose()
+    if data.is_empty:
+        print(f"monitor: no data in window ({window.describe()})")
+        return EXIT_OK
+
+    # Only now, so an empty hourly window needs no champion.
+    reference_frame, champion_version = reference.load_reference(env.get(env.MLFLOW_TRACKING_URI))
+    print(
+        f"monitor: {window.describe()}: {data.n_requests} requests, "
+        f"{len(data.predictions)} predictions, champion version {champion_version}"
+    )
+    report = run_checks(data, reference_frame, params)
+    for check in report.checks:
+        print(f"monitor: {check.line()}")
+    if report.failed:
+        names = ", ".join(check.name for check in report.failed)
+        print(f"monitor: failed checks: {names}", file=sys.stderr)
+        return EXIT_CHECK_FAILED
+    return EXIT_OK
+
+
 # argparse types raise ArgumentTypeError: for any other error, argparse would print the
 # function's name ("invalid _positive_int value") instead of the message.
 
@@ -303,7 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
         "Compare logged predictions, ground truth, and rejections with the champion's "
         "reference dataset; push results to the Evidently UI; exit 10 if any check that ran "
         "failed and post to ALERT_WEBHOOK_URL if set.",
-        _not_implemented(ROLE_SERVING),
+        _monitor,
         epilog=MONITOR_SEMANTICS,
     )
     monitor.add_argument(
