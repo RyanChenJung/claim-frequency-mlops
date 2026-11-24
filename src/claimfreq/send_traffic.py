@@ -65,13 +65,15 @@ SOURCE_TEST = "test"
 # Columns that are never posted: the id travels as policy_id, the targets go to ground_truth.
 NOT_POSTED = [schema.ID_COLUMN, schema.CLAIM_NB, schema.EXPOSURE]
 
-# Readiness wait: up to HEALTH_POLLS polls, HEALTH_INTERVAL_S apart (about 2 minutes). The API
-# retries loading @champion every 30 s, so this allows several attempts. Polls are counted
-# rather than timed, so a test with a no-op sleep finishes at once.
+# Readiness wait: up to HEALTH_POLLS polls, HEALTH_INTERVAL_S apart. Against an API that answers
+# (503 until @champion loads, which it retries every 30 s), that is about 2 minutes. Against one
+# that accepts connections but never answers, each poll also waits HEALTH_TIMEOUT, so the worst
+# case is 60 x 5 s + 59 x 2 s, about 7 minutes. Polls are counted rather than timed, so a test
+# with a no-op sleep finishes at once.
 HEALTH_POLLS = 60
 HEALTH_INTERVAL_S = 2.0
-# Short for /health, so a hung API cannot stretch the wait far beyond 2 minutes; longer for
-# /predict, which scores and logs a whole batch (httpx's own default is 5 s).
+# Short for /health, which only reports readiness; longer for /predict, which scores and logs a
+# whole batch (httpx's own default is 5 s).
 HEALTH_TIMEOUT = httpx.Timeout(5.0)
 PREDICT_TIMEOUT = httpx.Timeout(30.0)
 # Waits before each retry of a batch after a connection error, a timeout, or a 5xx.
@@ -148,10 +150,9 @@ def wait_for_health(client: httpx.Client, sleep: Sleep = time.sleep) -> None:
             pass
         if poll < HEALTH_POLLS - 1:
             sleep(HEALTH_INTERVAL_S)
-    waited = (HEALTH_POLLS - 1) * HEALTH_INTERVAL_S
     raise TrafficError(
-        f"API not ready at {client.base_url} after {HEALTH_POLLS} polls of {PATH_HEALTH} "
-        f"(about {waited:.0f} s); is the API running, and is there a @champion?"
+        f"API not ready at {client.base_url} after {HEALTH_POLLS} polls of {PATH_HEALTH}, "
+        f"{HEALTH_INTERVAL_S:.0f} s apart; is the API running, and is there a @champion?"
     )
 
 
@@ -237,8 +238,9 @@ def write_ground_truth(engine: Engine, scored: PredictResponse, batch: pd.DataFr
         with engine.begin() as connection:
             connection.execute(insert(logs.ground_truth), rows)
     except IntegrityError as error:
-        # Not retried: a missing prediction_log row will not appear by waiting a moment, and a
-        # check-constraint or duplicate-key failure will not either.
+        # Not retried. The API commits prediction_log before its 200 (docs/contracts.md, API,
+        # Logging order), so a missing row means another database or an API that breaks the
+        # contract, and a check-constraint or duplicate-key failure is not transient either.
         raise TrafficError(
             f"ground_truth write failed ({error.orig}). Most likely the API's prediction_log "
             "rows are not in this database: is MONITORING_DB_URL the same one the API logs to, "
@@ -292,8 +294,9 @@ def send_traffic(
         source: ``test`` or a drift scenario name.
         batch_id: The id of this run; ``default_batch_id(source)`` when omitted.
         params: Loaded ``params.yaml``; read from the repo root when omitted.
-        client: An HTTP client whose ``base_url`` is the API (FastAPI's ``TestClient`` works);
-            ``make_client(API_URL)`` when omitted, closed at the end.
+        client: An ``httpx.Client`` whose ``base_url`` is the API; its connection errors must
+            be ``httpx.TransportError``s to be retried. ``make_client(API_URL)`` when omitted,
+            and then closed at the end; an injected client stays open.
         sleep: Called with each wait in seconds; tests pass a recorder so nothing really waits.
 
     Returns:
