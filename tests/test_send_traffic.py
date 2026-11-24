@@ -12,6 +12,7 @@ so nothing really waits.
 
 import json
 import re
+import time
 import uuid
 from datetime import UTC, datetime
 
@@ -19,7 +20,8 @@ import httpx
 import pandas as pd
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import insert
+from sqlalchemy import event, insert, inspect
+from sqlalchemy.engine import Engine
 
 from claimfreq import send_traffic as send_traffic_module
 from claimfreq.cli import EXIT_ERROR, EXIT_OK, main
@@ -346,6 +348,94 @@ def test_makes_and_closes_its_own_client_for_api_url(holdout, api, monkeypatch, 
     assert clients[0].is_closed
 
 
+def test_default_batch_id_is_utc_even_when_local_time_is_not(monkeypatch):
+    with monkeypatch.context() as m:
+        m.setenv("TZ", "America/Chicago")
+        time.tzset()
+        before = datetime.now(UTC).replace(microsecond=0)
+        got = default_batch_id("test")
+        after = datetime.now(UTC)
+    time.tzset()
+    stamp = datetime.strptime(got, "test-%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+    assert before <= stamp <= after
+
+
+def test_observed_at_is_bound_as_aware_utc(holdout, client, sleeps):
+    seen = []
+
+    def capture(conn, clauseelement, multiparams, params, execution_options):
+        if getattr(clauseelement, "table", None) is logs.ground_truth:
+            seen.extend(row["observed_at"] for row in multiparams)
+
+    event.listen(Engine, "before_execute", capture)
+    try:
+        before = datetime.now(UTC)
+        run("test", client, sleeps)
+        after = datetime.now(UTC)
+    finally:
+        event.remove(Engine, "before_execute", capture)
+    assert len(seen) == N_ROWS
+    assert all(before <= s <= after for s in seen)  # a naive value raises TypeError
+
+
+def test_creates_the_monitoring_tables(holdout, client, sleeps, tmp_path, monkeypatch):
+    url = f"sqlite:///{tmp_path / 'own.db'}"
+    monkeypatch.setenv("MONITORING_DB_URL", url)
+    run(DriftScenario.SCHEMA_BREAK, client, sleeps)  # 422s only: nothing is written
+    names = set(inspect(logs.make_engine(url)).get_table_names())
+    assert names == {"prediction_log", "rejected_request_log", "ground_truth"}
+
+
+def test_a_health_timeout_counts_as_not_ready(holdout, api, client, sleeps):
+    api.health = [httpx.ReadTimeout("slow")]
+    assert run("test", client, sleeps).scored_batches == 3
+
+
+def test_retries_a_dropped_connection(holdout, api, client, sleeps):
+    api.predict = [httpx.RemoteProtocolError("server disconnected")]
+    assert run("test", client, sleeps).scored_batches == 3
+    assert sleeps == [RETRY_DELAYS_S[0]]
+
+
+def test_predict_waits_30_s(holdout, api, sleeps):
+    seen = []
+    with _recording(api, seen) as c:
+        run("test", c, sleeps)
+    assert {t["read"] for _, t in seen} == {30.0}
+
+
+def test_a_200_body_that_breaks_the_contract_stops_the_run(holdout, api, client, sleeps):
+    api.predict = [200]  # FakeAPI answers {"detail": "scripted 200"}
+    with pytest.raises(TrafficError, match="breaks the API contract"):
+        run("test", client, sleeps)
+    assert api.table("ground_truth").empty
+
+
+def test_a_rejected_ground_truth_batch_writes_none_of_its_rows(holdout, api, client, sleeps):
+    holdout.loc[N_ROWS - 1, schema.EXPOSURE] = 0.0  # breaks ck_ground_truth_exposure in batch 3
+    holdout.to_parquet(paths.data_path(paths.TEST), index=False)
+    with pytest.raises(TrafficError, match="ground_truth write failed"):
+        run("test", client, sleeps)
+    assert len(api.table("ground_truth")) == 2 * BATCH_SIZE
+
+
+def test_a_later_failure_keeps_earlier_ground_truth(holdout, api, sleeps):
+    def handler(request):
+        if request.url.path == PATH_PREDICT and api.calls.count(PATH_PREDICT) == 2:
+            api.predict = [404]  # the third batch
+        return api(request)
+
+    with httpx.Client(transport=httpx.MockTransport(handler), base_url="http://api.test") as c:
+        with pytest.raises(TrafficError, match="HTTP 404"):
+            run("test", c, sleeps)
+    assert len(api.table("ground_truth")) == 2 * BATCH_SIZE
+
+
+def test_an_injected_client_stays_open(holdout, client, sleeps):
+    run("test", client, sleeps)
+    assert not client.is_closed
+
+
 @pytest.fixture
 def cli_api(holdout, api, monkeypatch) -> FakeAPI:
     """Route the CLI's own client to the fake API; return the fake."""
@@ -389,3 +479,8 @@ def test_cli_send_traffic_exits_1_with_the_message_and_no_traceback(cli_api, cap
     assert err.startswith("send-traffic: error: ground_truth write failed")
     assert "MONITORING_DB_URL" in err
     assert "Traceback" not in err
+
+
+def test_cli_prints_the_rejected_policies_on_422(cli_api, capsys):
+    assert main(["send-traffic", "--source", "schema_break"]) == EXIT_OK
+    assert f"0 policies scored, {N_ROWS} rejected; 0 ground_truth rows" in capsys.readouterr().out
