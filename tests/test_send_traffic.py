@@ -174,6 +174,32 @@ def run(source: str, client: httpx.Client, sleeps: Sleeps):
     return send_traffic(source, batch_id="run-1", params=PARAMS, client=client, sleep=sleeps)
 
 
+def _recording(api: FakeAPI, seen: list) -> httpx.Client:
+    """Return a client to ``api`` that records each /predict body and its timeout in ``seen``."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == PATH_PREDICT:
+            seen.append((json.loads(request.content), request.extensions["timeout"]))
+        return api(request)
+
+    return httpx.Client(transport=httpx.MockTransport(handler), base_url="http://api.test")
+
+
+def test_batches_follow_traffic_batch_size_and_file_order(holdout, api, sleeps):
+    # 60, not the default 100, so a hard-coded batch size fails.
+    seen = []
+    with _recording(api, seen) as c:
+        send_traffic(
+            "test",
+            batch_id="run-1",
+            params=Params(traffic=TrafficParams(batch_size=60)),
+            client=c,
+            sleep=sleeps,
+        )
+    assert [len(b["policies"]) for b, _ in seen] == [60, 60, 60, 60, 10]
+    assert [p["policy_id"] for b, _ in seen for p in b["policies"]] == holdout[ID].tolist()
+
+
 def test_default_batch_id_is_source_and_utc_time():
     moment = datetime(2026, 12, 1, 15, 30, 0, tzinfo=UTC)
     assert default_batch_id("portfolio_shift", moment) == "portfolio_shift-20261201T153000Z"
