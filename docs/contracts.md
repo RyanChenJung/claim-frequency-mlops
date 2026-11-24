@@ -112,6 +112,7 @@ Training and monitoring use the same code ([ADR-0002](adr/0002-poisson-deviance-
 - `predicted_frequency` is > 0 and finite.
 - `/model-info`: `trained_at` is a timezone-aware datetime, and `metrics` holds finite values only. The API omits any metric whose value is not finite (for example a NaN Gini), because JSON has no NaN.
 - `/health` is a **readiness** check, so the compose healthcheck and `send-traffic` can wait for its HTTP 200.
+- **Logging order.** `/predict` commits its `prediction_log` rows before it returns HTTP 200, so a client can write `ground_truth` for those rows right away. The API never logs in a background task.
 - **422:** FastAPI's default validation body, `{"detail": [{"loc": [...], "msg": "...", "type": "..."}, ...]}`. Every 422 is also logged to `rejected_request_log`.
 - **503:** until the model has loaded, `/predict` and `/model-info` return `{"detail": "model not loaded"}`, and `/health` returns its `degraded` body.
 
