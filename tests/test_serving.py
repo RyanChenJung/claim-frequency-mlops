@@ -6,9 +6,11 @@ import threading
 import time
 from datetime import UTC, datetime
 
+import httpx
 import numpy as np
 import pandas as pd
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 from sqlalchemy import func, insert, select
 
@@ -101,22 +103,56 @@ def test_predict_logs_every_policy(client, db_url):
     assert {row["model_semver"] for row in rows} == {"0.0.0"}
 
 
-def test_ground_truth_can_be_written_right_after_predict(client, db_url):
-    """The rows are committed before the 200, so the ground_truth foreign key holds."""
-    body = client.post(PATH_PREDICT, json=request_body(n=2)).json()
+@pytest.fixture
+def live_server(db_url):
+    """Serve the app with a real uvicorn server in a thread, as the api container does.
 
-    rows = [
-        {
-            "prediction_id": p["prediction_id"],
-            "ClaimNb": 0,
-            "Exposure": 1.0,
-            "observed_at": datetime.now(UTC),
-        }
-        for p in body["predictions"]
-    ]
-    with make_engine(db_url).begin() as connection:
-        connection.execute(insert(ground_truth), rows)
-    assert count_rows(db_url, ground_truth) == 2
+    TestClient waits for a response's background tasks before it returns, so it cannot show
+    when the log rows are written. A real server sends the 200 first, like in compose.
+    """
+    config = uvicorn.Config(
+        create_app(model=TrueFrequencyModel()), host="127.0.0.1", port=0, log_level="warning"
+    )
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    for _ in range(500):
+        if server.started:
+            break
+        time.sleep(0.01)
+    assert server.started, "uvicorn did not start"
+    # Port 0 lets the OS pick a free port; read back the one it picked.
+    port = server.servers[0].sockets[0].getsockname()[1]
+    yield f"http://127.0.0.1:{port}"
+    server.should_exit = True
+    thread.join(timeout=5)
+
+
+def test_ground_truth_can_be_written_right_after_predict(live_server, db_url):
+    """The rows are committed before the 200, so the ground_truth foreign key holds.
+
+    This is the contract's logging-order rule, which send-traffic relies on. It writes ground
+    truth the moment each 200 arrives, as send-traffic does, several times in a row.
+    """
+    engine = make_engine(db_url)
+    with httpx.Client(base_url=live_server) as http:
+        for _ in range(5):
+            response = http.post(PATH_PREDICT, json=request_body(n=50))
+            assert response.status_code == 200
+            rows = [
+                {
+                    "prediction_id": p["prediction_id"],
+                    "ClaimNb": 0,
+                    "Exposure": 1.0,
+                    "observed_at": datetime.now(UTC),
+                }
+                for p in response.json()["predictions"]
+            ]
+            # Raises IntegrityError if a prediction_log row is not committed yet.
+            with engine.begin() as connection:
+                connection.execute(insert(ground_truth), rows)
+    engine.dispose()
+    assert count_rows(db_url, ground_truth) == 250
 
 
 def test_a_model_that_returns_a_bad_value_gives_500_and_logs_nothing(db_url):
