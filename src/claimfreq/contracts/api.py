@@ -3,7 +3,7 @@
 Pydantic models only, with no FastAPI dependency, so that:
 
 - Role D (Serving) uses them as FastAPI request and response models.
-- Role D's ``send-traffic`` builds requests and parses responses with the same classes.
+- Role A's ``send-traffic`` builds requests and parses responses with the same classes.
 - Role C (Platform) knows the paths for health checks and smoke tests.
 
 Endpoints:

@@ -324,7 +324,7 @@ Airflow 3.4.0 (`apache/airflow:3.4.0-python3.12`, which ships the docker provide
 
 - **Dependency groups** ([PEP 735](https://peps.python.org/pep-0735/)) in `pyproject.toml`. Each role adds its packages to `trainer` and `api` in its own PR (`trainer` already has `mlflow` and `skops` from #14):
   - `dev`: test and lint tools. API test dependencies (for example `httpx`, which FastAPI's `TestClient` needs) go here too.
-  - `trainer`: A adds `dvc[s3]`; B adds `mlflow`, `flaml[automl]`, `lightgbm`, `xgboost`, `skops`; D adds `evidently` and an HTTP client.
+  - `trainer`: A adds `dvc[s3]` and `httpx` (for `send-traffic`); B adds `mlflow`, `flaml[automl]`, `lightgbm`, `xgboost`, `skops`; D adds `evidently`.
   - `api`: D adds `fastapi`, `uvicorn`, `mlflow-skinny`, `lightgbm`, `xgboost`, `skops`.
   - `[tool.uv] default-groups = ["dev", "trainer", "api"]`, so a plain `uv sync` on a laptop installs everything. CI uses `uv sync --locked --all-groups` ([Dev setup](#dev-setup)).
   - After a rebase, re-run `uv lock` instead of hand-merging `uv.lock`.
@@ -367,7 +367,7 @@ Then, per role:
 
   ```bash
   uv run claimfreq fake-data --rows 10000 --seed 3 --id-start 900000 --out data/fake/splits/test.parquet
-  DATA_DIR=data/fake uv run claimfreq send-traffic --source test   # stub for now: exits 3
+  DATA_DIR=data/fake uv run claimfreq send-traffic --source test   # needs the API running
   ```
 
 - **B. Modeling.** Implement `train` first, against fake splits under a git-ignored data directory:

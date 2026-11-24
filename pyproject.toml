@@ -34,8 +34,8 @@ dev = [
     "ruff",
 ]
 # Installed with the base dependencies in docker/trainer.Dockerfile (Role C). Role A adds
-# dvc[s3]; Role B adds mlflow, flaml[automl], lightgbm, xgboost, skops; Role D adds evidently
-# and an HTTP client. See docs/contracts.md, Images.
+# dvc[s3] and httpx (for send-traffic); Role B adds mlflow, flaml[automl], lightgbm, xgboost,
+# skops; Role D adds evidently. See docs/contracts.md, Images.
 trainer = [
     "dvc[s3]>=3,<4",
     "httpx>=0.28.1",
