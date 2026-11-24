@@ -500,6 +500,41 @@ def test_a_batch_id_already_in_rejected_request_log_is_refused(holdout, api, cli
     assert api.calls == []
 
 
+@pytest.mark.parametrize("batch_id", ["", "x" * (MAX_BATCH_ID_LENGTH + 1)])
+def test_a_batch_id_must_have_1_to_64_characters(holdout, api, client, sleeps, batch_id):
+    with pytest.raises(TrafficError, match="batch_id must be 1 to 64 characters"):
+        send_traffic("test", batch_id=batch_id, params=PARAMS, client=client, sleep=sleeps)
+    assert api.calls == []
+
+
+def test_a_missing_source_file_names_the_fix(holdout, client, sleeps):
+    paths.drift_path(DriftScenario.COLUMN_SWAP).unlink(missing_ok=True)
+    with pytest.raises(TrafficError, match="not found: build the data with `uv run dvc repro`"):
+        run(DriftScenario.COLUMN_SWAP, client, sleeps)
+
+
+def test_an_empty_api_url_is_a_setup_error(holdout, monkeypatch, sleeps):
+    monkeypatch.setenv("API_URL", "")
+    with pytest.raises(TrafficError, match="API_URL is empty"):
+        send_traffic("test", params=PARAMS, sleep=sleeps)
+    assert sleeps == []  # no health polling of an empty URL
+
+
+def test_an_empty_monitoring_db_url_is_a_setup_error(holdout, client, monkeypatch, sleeps):
+    monkeypatch.setenv("MONITORING_DB_URL", "")
+    with pytest.raises(TrafficError, match="MONITORING_DB_URL is empty"):
+        run("test", client, sleeps)
+
+
+def test_a_monitoring_db_in_a_missing_folder_is_a_setup_error(
+    holdout, api, client, tmp_path, monkeypatch, sleeps
+):
+    monkeypatch.setenv("MONITORING_DB_URL", f"sqlite:///{tmp_path / 'nowhere' / 'monitoring.db'}")
+    with pytest.raises(TrafficError, match="cannot open the monitoring database"):
+        run("test", client, sleeps)
+    assert api.calls == []
+
+
 def test_an_injected_client_stays_open(holdout, client, sleeps):
     run("test", client, sleeps)
     assert not client.is_closed
@@ -553,3 +588,13 @@ def test_cli_send_traffic_exits_1_with_the_message_and_no_traceback(cli_api, cap
 def test_cli_prints_the_rejected_policies_on_422(cli_api, capsys):
     assert main(["send-traffic", "--source", "schema_break"]) == EXIT_OK
     assert f"0 policies scored, {N_ROWS} rejected; 0 ground_truth rows" in capsys.readouterr().out
+
+
+def test_cli_send_traffic_explains_a_missing_file_without_a_traceback(cli_api, capsys):
+    paths.drift_path(DriftScenario.COLUMN_SWAP).unlink(missing_ok=True)
+
+    assert main(["send-traffic", "--source", "column_swap"]) == EXIT_ERROR
+
+    err = capsys.readouterr().err
+    assert "not found: build the data with `uv run dvc repro`" in err
+    assert "Traceback" not in err

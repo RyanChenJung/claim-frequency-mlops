@@ -14,7 +14,11 @@ simulates the outcomes that arrive later (docs/contracts.md, CLI and Drift files
    rejected with 422 is counted and has no ground truth.
 
 It succeeds when every batch got 200 or 422. Anything else raises ``TrafficError``, which the
-CLI turns into exit code 1:
+CLI turns into exit code 1, with a one-line message:
+
+- a setup mistake: no source file (run ``dvc repro`` or ``dvc pull``), an empty ``API_URL`` or
+  ``MONITORING_DB_URL``, a monitoring database that cannot be opened, or a ``batch_id`` that is
+  empty or longer than 64 characters;
 
 - a ``batch_id`` that is already in the monitoring logs, because ``monitor --batch-id`` would
   then mix two runs (a failed run re-sent under the same id would count its batches twice);
@@ -45,10 +49,15 @@ import httpx
 import pandas as pd
 from pydantic import ValidationError
 from sqlalchemy import Engine, func, insert, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from claimfreq.contracts import env, logs, paths, schema
-from claimfreq.contracts.api import PATH_HEALTH, PATH_PREDICT, PredictResponse
+from claimfreq.contracts.api import (
+    MAX_BATCH_ID_LENGTH,
+    PATH_HEALTH,
+    PATH_PREDICT,
+    PredictResponse,
+)
 from claimfreq.contracts.params import Params, load_params
 from claimfreq.contracts.paths import DriftScenario
 
@@ -294,18 +303,43 @@ def send_traffic(
         TrafficError: on any failure the module docstring lists; the CLI exits 1.
     """
     params = params or load_params()
+    # Setup mistakes fail here with a one-line hint, before any connection is made.
+    if batch_id is None:
+        batch_id = default_batch_id(source)
+    if not 1 <= len(batch_id) <= MAX_BATCH_ID_LENGTH:
+        raise TrafficError(
+            f"batch_id must be 1 to {MAX_BATCH_ID_LENGTH} characters, got {len(batch_id)}"
+        )
     path = source_path(source)
+    if not path.is_file():
+        raise TrafficError(
+            f"{path} not found: build the data with `uv run dvc repro`, or fetch it with "
+            "`uv run dvc pull` (and check DATA_DIR, which should normally be unset)"
+        )
+    api_url = env.get(env.API_URL)
+    if client is None and not api_url:
+        raise TrafficError(
+            f"{env.API_URL} is empty: unset it for the default, or set the API's URL"
+        )
+    db_url = env.get(env.MONITORING_DB_URL)
+    if not db_url:
+        raise TrafficError(f"{env.MONITORING_DB_URL} is empty: unset it for the default, or set it")
     df = pd.read_parquet(path)
-    batch_id = batch_id or default_batch_id(source)
     size = params.traffic.batch_size
 
     own_client = client is None
     if client is None:
-        client = make_client(env.get(env.API_URL) or "")
-    engine = logs.make_engine(env.get(env.MONITORING_DB_URL) or "")
+        client = make_client(api_url)
+    engine = logs.make_engine(db_url)
     counts = TrafficCounts()
     try:
-        logs.create_all(engine)
+        try:
+            logs.create_all(engine)
+        except OperationalError as error:
+            raise TrafficError(
+                f"cannot open the monitoring database {engine.url.render_as_string()} "
+                f"({error.orig}): is {env.MONITORING_DB_URL} right, and does its folder exist?"
+            ) from error
         check_batch_id_unused(engine, batch_id)
         print(
             f"send-traffic: {len(df)} policies from {path} in batches of {size}, "
