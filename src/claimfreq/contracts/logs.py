@@ -1,7 +1,7 @@
 """Monitoring log contract: the tables of the ``monitoring`` database.
 
 Role D's API writes ``prediction_log`` (every scored policy) and ``rejected_request_log``
-(every HTTP 422). Role D's ``send-traffic`` writes ``ground_truth`` after the predictions, to
+(every HTTP 422). Role A's ``send-traffic`` writes ``ground_truth`` after the predictions, to
 simulate claim outcomes that arrive later. Role D's ``monitor`` reads all three tables and
 compares them with the reference dataset.
 

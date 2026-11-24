@@ -129,7 +129,7 @@ docker compose run --rm trainer claimfreq evaluate-test
 
 This logs `test_*` metrics on the champion's run. The test set is used only here, and as clean traffic in the next step.
 
-### 8. Clean traffic: no alert ⏳ [#19](https://github.com/RyanChenJung/claim-frequency-mlops/issues/19), [#20](https://github.com/RyanChenJung/claim-frequency-mlops/issues/20), [#25](https://github.com/RyanChenJung/claim-frequency-mlops/issues/25)
+### 8. Clean traffic: no alert ⏳ [#20](https://github.com/RyanChenJung/claim-frequency-mlops/issues/20), [#25](https://github.com/RyanChenJung/claim-frequency-mlops/issues/25)
 
 ```bash
 docker compose run --rm trainer claimfreq send-traffic --source test --batch-id clean-1
