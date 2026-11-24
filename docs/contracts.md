@@ -166,10 +166,10 @@ Each **drift scenario** (`DriftScenario`) is a corruption of the test split. All
 | `concept_drift` | Rating factors unchanged; `ClaimNb` increased so that the true claim rate is higher, still clipped to `claim_nb_cap`. The exact factor is Role A's choice, above the minimum effect size below | Yes |
 
 - **The `column_swap` rule.** Swap `VehAge` and `VehPower` only on the rows where both values are valid in the other column: `VehAge` must be within `VehPower`'s bounds (4–15), and `VehPower` is always within `VehAge`'s bounds (0–100). All other rows stay unchanged, and the file keeps every test row. A test in `tests/test_paths.py` applies this rule to fake policies and checks that the result passes the clean schema.
-- **Minimum effect sizes**, so that each scenario trips its check ([below](#what-the-monitor-must-catch)). Role A may go further.
-  - `concept_drift` raises the observed claim rate of the file by at least 25% relative to the test split.
+- **Minimum effect sizes**, so that each scenario trips its checks ([below](#what-the-monitor-must-catch)). Role A may go further, with one limit: a stronger `portfolio_shift` also raises the sample's claim rate, and with it the live deviance ratio, which `portfolio_shift` must still pass because its row does not name it.
+  - `concept_drift` raises the observed claim rate of the file by at least 40% relative to the test split.
   - `portfolio_shift` lowers mean `DrivAge` by at least 5 years and raises median `Density` by at least 50%.
-- **Integration ownership.** Role D owns the end-to-end check that each scenario fails exactly the check named in the [scenario table](#what-the-monitor-must-catch), at M2 integration, on Role A's real `make-drift` outputs.
+- **Integration ownership.** Role D owns the end-to-end check that each scenario fails exactly the checks named in the [scenario table](#what-the-monitor-must-catch), at M2 integration, on Role A's real `make-drift` outputs.
 - `schema_break` and `out_of_bounds` are never validated; the API rejects them with 422.
 - **What `send-traffic` sends.** It posts every column except `IDpol`, `ClaimNb`, and `Exposure` as is, with no coercion, so the broken files reach the API broken. It uses `IDpol` as `policy_id`, and keeps `ClaimNb` and `Exposure` for `ground_truth`.
 
@@ -189,15 +189,15 @@ Each **drift scenario** (`DriftScenario`) is a corruption of the test split. All
 - **Exit code.** A skipped check never fails the run. `monitor` exits 10 if any check that ran failed, else 0.
 - `claimfreq monitor --help` shows the same rules.
 
-Each scenario must fail a specific check:
+Each scenario must fail exactly the checks its row names. Every other check that runs must pass, except one that the row says may also fail, which can go either way:
 
-| Scenario | Check that must fail |
+| Scenario | Checks that must fail |
 |---|---|
 | clean test set | none (no false alarm) |
 | `schema_break`, `out_of_bounds` | rejection rate > `rejection_rate_max` |
-| `column_swap` | data drift share ≥ `drift_share_max` (2 of 9 rating factors drift) and/or prediction drift |
+| `column_swap` | data drift share ≥ `drift_share_max` (2 of 9 rating factors drift) and/or prediction drift; the live calibration ratio may also fail |
 | `portfolio_shift` | data drift share and prediction drift |
-| `concept_drift` | live calibration ratio outside [`calibration_min`, `calibration_max`]; data drift passes |
+| `concept_drift` | live calibration ratio outside [`calibration_min`, `calibration_max`] and live deviance ratio > `live_deviance_max_ratio`; data drift and prediction drift pass |
 
 ### Params — [`params.py`](../src/claimfreq/contracts/params.py)
 
@@ -324,7 +324,7 @@ Airflow 3.4.0 (`apache/airflow:3.4.0-python3.12`, which ships the docker provide
 
 - **Dependency groups** ([PEP 735](https://peps.python.org/pep-0735/)) in `pyproject.toml`. Each role adds its packages to `trainer` and `api` in its own PR (`trainer` already has `mlflow` and `skops` from #14):
   - `dev`: test and lint tools. API test dependencies (for example `httpx`, which FastAPI's `TestClient` needs) go here too.
-  - `trainer`: A adds `dvc[s3]`; B adds `mlflow`, `flaml[automl]`, `lightgbm`, `xgboost`, `skops`; D adds `evidently` and an HTTP client.
+  - `trainer`: A adds `dvc[s3]` and `httpx` (for `send-traffic`); B adds `mlflow`, `flaml[automl]`, `lightgbm`, `xgboost`, `skops`; D adds `evidently`.
   - `api`: D adds `fastapi`, `uvicorn`, `mlflow-skinny`, `lightgbm`, `xgboost`, `skops`.
   - `[tool.uv] default-groups = ["dev", "trainer", "api"]`, so a plain `uv sync` on a laptop installs everything. CI uses `uv sync --locked --all-groups` ([Dev setup](#dev-setup)).
   - After a rebase, re-run `uv lock` instead of hand-merging `uv.lock`.
@@ -367,7 +367,7 @@ Then, per role:
 
   ```bash
   uv run claimfreq fake-data --rows 10000 --seed 3 --id-start 900000 --out data/fake/splits/test.parquet
-  DATA_DIR=data/fake uv run claimfreq send-traffic --source test   # stub for now: exits 3
+  DATA_DIR=data/fake uv run claimfreq send-traffic --source test   # needs the API running
   ```
 
 - **B. Modeling.** Implement `train` first, against fake splits under a git-ignored data directory:
@@ -388,7 +388,7 @@ Then, per role:
   ```
 
   It proves the mounts (the file appears under `data/fake/` in the repo on the host), that `MONITORING_DB_URL` reached the container (the assertion fails if it fell back to the SQLite default; SQLAlchemy masks the password in the message), and that Postgres is reachable. A stub's exit code 3 reaches a DAG task only when the task runs the command directly (`train`, `register`, `monitor`); under `dvc repro`, a stub stage shows as DVC's own failure. The `dvc repro` task also needs Role A's DVC setup before it can run ([DAGs](#dags)).
-- **D. Serving and monitoring.** Start with the FastAPI app. Build it with `create_app(model=TrueFrequencyModel())`, validate with `PredictRequest`, build the model input with `coerce_features`, and log with `prediction_log_rows` to the default SQLite `MONITORING_DB_URL`. Then implement `monitor` (compare the logs with `make_reference_frame`). Use at least 10,000 fake policies per window: on fewer, the calibration check is dominated by noise and raises false alarms even on clean traffic. To feed the API before Role A's `send-traffic` lands, post `make_predict_request` bodies from a test.
+- **D. Serving and monitoring.** Start with the FastAPI app. Build it with `create_app(model=TrueFrequencyModel())`, validate with `PredictRequest`, build the model input with `coerce_features`, and log with `prediction_log_rows` to the default SQLite `MONITORING_DB_URL`. Then implement `monitor` (compare the logs with `make_reference_frame`). Use at least 20,000 fake policies per window: on fewer, the calibration check is dominated by noise and raises false alarms, even on clean traffic and on `portfolio_shift`, which keeps only part of the window. To feed the API before Role A's `send-traffic` lands, post `make_predict_request` bodies from a test.
 
 ## Changing a contract
 
