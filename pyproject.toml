@@ -30,6 +30,7 @@ claimfreq = "claimfreq.cli:main"
 # Test and lint tools, never installed in an image. API test dependencies (for example httpx,
 # which FastAPI's TestClient needs) go here too.
 dev = [
+    "httpx>=0.28.1",
     "pytest",
     "ruff",
 ]
@@ -43,7 +44,14 @@ trainer = [
 ]
 # Installed with the base dependencies in docker/api.Dockerfile (Role D). Role D adds fastapi,
 # uvicorn, mlflow-skinny, lightgbm, xgboost, skops.
-api = []
+api = [
+    "fastapi>=0.163.2",
+    "lightgbm>=4.7.0",
+    "mlflow-skinny==3.18.0",
+    "skops>=0.16.0",
+    "uvicorn>=0.54.0",
+    "xgboost>=3.4.1",
+]
 
 [build-system]
 requires = ["uv_build>=0.13.9,<0.14"]

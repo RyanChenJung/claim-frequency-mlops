@@ -246,6 +246,7 @@ kombu==5.7.0
     #   dvc-task
 lazy-importer==0.1.0
     # via importlib-metadata
+lightgbm==4.7.0
 mako==1.4.3
     # via alembic
 markdown-it-py==4.3.0
@@ -271,19 +272,25 @@ multidict==7.2.1
     #   aiohttp
     #   yarl
 narwhals==2.29.0
-    # via scikit-learn
+    # via
+    #   lightgbm
+    #   scikit-learn
 networkx==3.7
     # via dvc
 numpy==2.5.5
     # via
     #   claim-frequency-mlops
     #   contourpy
+    #   lightgbm
     #   matplotlib
     #   mlflow
     #   pandas
     #   scikit-learn
     #   scipy
     #   skops
+    #   xgboost
+nvidia-nccl-cu13==2.32.6 ; sys_platform == 'linux'
+    # via xgboost
 omegaconf==2.3.1
     # via
     #   dvc
@@ -439,9 +446,11 @@ scikit-learn==1.9.1
     #   skops
 scipy==1.18.1
     # via
+    #   lightgbm
     #   mlflow
     #   scikit-learn
     #   skops
+    #   xgboost
 scmrepo==3.6.2
     # via
     #   dvc
@@ -551,6 +560,7 @@ werkzeug==3.1.9
     #   flask-cors
 wrapt==2.5.2
     # via aiobotocore
+xgboost==3.4.1
 yarl==1.25.1
     # via aiohttp
 zc-lockfile==4.1
