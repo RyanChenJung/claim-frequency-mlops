@@ -1,7 +1,8 @@
 """Publish monitor results: push the Evidently snapshot, and send the alert.
 
 - ``push_snapshot`` adds one snapshot per run to the ``claim-frequency`` project of the
-  Evidently UI at ``EVIDENTLY_UI_URL``, and creates the project on the first run.
+  Evidently UI at ``EVIDENTLY_UI_URL``. On the first run it creates the project and its
+  dashboard: three line charts, with one point per monitor run.
 - ``send_alert`` posts a Discord webhook body ``{"content": "..."}`` to ``ALERT_WEBHOOK_URL``.
   The URL is a secret: it lives only in ``.env``, and this module never prints it.
 """
@@ -10,6 +11,8 @@ import json
 import urllib.request
 from typing import Any
 
+from claimfreq.contracts.model import PREDICTED_FREQUENCY
+from claimfreq.contracts.schema import FEATURE_COLUMNS
 from claimfreq.monitoring.checks import CheckResult
 from claimfreq.monitoring.window import Window
 
@@ -37,10 +40,59 @@ def snapshot_name(window: Window) -> str:
     return "all traffic"
 
 
+def dashboard_panels() -> list[Any]:
+    """The dashboard charts, built from the metrics of ``checks.run_drift_report``.
+
+    1. The share of drifted rating factors: the data drift check.
+    2. The drift score of ``predicted_frequency``: the prediction drift check.
+    3. The drift score of each rating factor, to see which ones moved.
+    """
+    # Imported here, because Evidently is slow to import.
+    from evidently.sdk.models import PanelMetric
+    from evidently.sdk.panels import line_plot_panel
+
+    # Evidently labels each DriftedColumnsCount result with its column list, written like a
+    # Python list, so the filter picks the rating factors and skips predicted_frequency.
+    share = PanelMetric(
+        legend="share of drifted rating factors",
+        metric="DriftedColumnsCount",
+        metric_labels={"columns": str(FEATURE_COLUMNS), "value_type": "share"},
+    )
+    prediction = PanelMetric(
+        legend=PREDICTED_FREQUENCY,
+        metric="ValueDrift",
+        metric_labels={"column": PREDICTED_FREQUENCY},
+    )
+    per_factor = [
+        PanelMetric(legend=column, metric="ValueDrift", metric_labels={"column": column})
+        for column in FEATURE_COLUMNS
+    ]
+    return [
+        line_plot_panel(
+            "Share of drifted rating factors",
+            [share],
+            description="The data drift check fails at monitor.drift_share_max.",
+            size="half",
+        ),
+        line_plot_panel(
+            "Prediction drift score",
+            [prediction],
+            description="Evidently's drift score of predicted_frequency.",
+            size="half",
+        ),
+        line_plot_panel(
+            "Drift score per rating factor",
+            per_factor,
+            description="Evidently's drift score of each rating factor.",
+        ),
+    ]
+
+
 def push_snapshot(url: str, snapshot: Any, window: Window) -> str:
     """Push ``snapshot`` to the ``claim-frequency`` project, and return the project id.
 
-    The project is looked up by name and created if it does not exist yet.
+    The project is looked up by name and created if it does not exist yet. If its dashboard
+    has no charts yet, the charts of ``dashboard_panels`` are added.
     """
     workspace = _workspace(url)
     projects = workspace.search_project(EVIDENTLY_PROJECT)
@@ -50,6 +102,10 @@ def push_snapshot(url: str, snapshot: Any, window: Window) -> str:
         project = workspace.create_project(
             EVIDENTLY_PROJECT, description=EVIDENTLY_PROJECT_DESCRIPTION
         )
+    # Only when empty, so charts that someone added or changed in the UI are kept.
+    if not project.dashboard.model().panels:
+        for panel in dashboard_panels():
+            project.dashboard.add_panel(panel)
     workspace.add_run(project.id, snapshot, name=snapshot_name(window))
     return str(project.id)
 

@@ -13,6 +13,7 @@ import pytest
 
 from claimfreq.cli import EXIT_CHECK_FAILED, EXIT_ERROR, EXIT_OK, main
 from claimfreq.contracts import env
+from claimfreq.contracts.schema import FEATURE_COLUMNS
 from claimfreq.monitoring import checks, publish, reference, window
 from claimfreq.monitoring.checks import CheckResult, MonitorReport, Status
 from claimfreq.monitoring.window import Window, WindowData
@@ -20,10 +21,24 @@ from claimfreq.monitoring.window import Window, WindowData
 SECRET_URL = "https://discord.example/api/webhooks/123/secret-token"
 
 
+class FakeDashboard:
+    """Stands in for a project's dashboard: a list of panels."""
+
+    def __init__(self):
+        self.panels = []
+
+    def model(self):
+        return self
+
+    def add_panel(self, panel):
+        self.panels.append(panel)
+
+
 class FakeProject:
     def __init__(self, name):
         self.id = uuid.uuid4()
         self.name = name
+        self.dashboard = FakeDashboard()
 
 
 class FakeWorkspace:
@@ -88,6 +103,39 @@ def test_push_creates_the_project_once_and_adds_one_run_per_call(workspace):
         ("snapshot-1", "clean-1"),
         ("snapshot-2", "column_swap-1"),
     ]
+
+
+def test_push_adds_the_dashboard_charts_once(workspace):
+    publish.push_snapshot("http://ui", "snapshot-1", Window(batch_id="clean-1"))
+    publish.push_snapshot("http://ui", "snapshot-2", Window(batch_id="column_swap-1"))
+
+    (project,) = workspace.projects
+    titles = [panel.title for panel in project.dashboard.panels]
+    assert titles == [
+        "Share of drifted rating factors",
+        "Prediction drift score",
+        "Drift score per rating factor",
+    ]
+
+
+def test_push_keeps_charts_that_already_exist(workspace):
+    project = workspace.create_project("claim-frequency")
+    project.dashboard.add_panel("a chart someone made in the UI")
+    publish.push_snapshot("http://ui", "snapshot-1", Window())
+    assert project.dashboard.panels == ["a chart someone made in the UI"]
+
+
+def test_dashboard_charts_select_the_right_series():
+    share, prediction, per_factor = publish.dashboard_panels()
+    (share_metric,) = share.values
+    assert share_metric.metric == "evidently:metric_v2:DriftedColumnsCount"
+    # Evidently stores the column list as its Python text form.
+    assert share_metric.metric_labels == {
+        "columns": str(FEATURE_COLUMNS),
+        "value_type": "share",
+    }
+    assert prediction.values[0].metric_labels == {"column": "predicted_frequency"}
+    assert [m.metric_labels["column"] for m in per_factor.values] == FEATURE_COLUMNS
 
 
 def test_snapshot_name_falls_back_to_the_window():
