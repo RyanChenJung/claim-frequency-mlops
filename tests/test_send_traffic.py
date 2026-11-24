@@ -450,6 +450,56 @@ def test_a_later_failure_keeps_earlier_ground_truth(holdout, api, sleeps):
     assert len(api.table("ground_truth")) == 2 * BATCH_SIZE
 
 
+def test_a_failure_says_how_far_the_run_got(holdout, api, sleeps):
+    def handler(request):
+        if request.url.path == PATH_PREDICT and api.calls.count(PATH_PREDICT) == 2:
+            api.predict = [404]  # the third batch
+        return api(request)
+
+    with httpx.Client(transport=httpx.MockTransport(handler), base_url="http://api.test") as c:
+        with pytest.raises(TrafficError) as error:
+            run("test", c, sleeps)
+    assert str(error.value).endswith(
+        "(after 2 of 3 batches; 200 ground_truth rows already written under batch_id=run-1; "
+        "re-run with a new --batch-id)"
+    )
+
+
+def test_a_batch_id_already_in_prediction_log_is_refused(holdout, api, client, sleeps):
+    run("test", client, sleeps)
+    calls = len(api.calls)
+
+    with pytest.raises(
+        TrafficError, match=r"batch_id=run-1 is already used \(250 in prediction_log"
+    ):
+        run("test", client, sleeps)
+
+    assert len(api.calls) == calls  # refused before any request
+    assert len(api.table("prediction_log")) == N_ROWS
+
+
+def test_a_batch_id_already_in_rejected_request_log_is_refused(holdout, api, client, sleeps):
+    # As the real API logs a 422; the fake API does not log rejections itself.
+    with api.engine.begin() as connection:
+        connection.execute(
+            insert(logs.rejected_request_log),
+            {
+                "request_id": str(uuid.uuid4()),
+                "received_at": datetime.now(UTC),
+                "batch_id": "run-1",
+                "status_code": 422,
+                "error_type": "missing",
+                "error_detail": "[]",
+                "n_policies": BATCH_SIZE,
+            },
+        )
+
+    with pytest.raises(TrafficError, match="1 in rejected_request_log"):
+        run(DriftScenario.SCHEMA_BREAK, client, sleeps)
+
+    assert api.calls == []
+
+
 def test_an_injected_client_stays_open(holdout, client, sleeps):
     run("test", client, sleeps)
     assert not client.is_closed

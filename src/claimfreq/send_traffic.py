@@ -16,6 +16,9 @@ simulates the outcomes that arrive later (docs/contracts.md, CLI and Drift files
 It succeeds when every batch got 200 or 422. Anything else raises ``TrafficError``, which the
 CLI turns into exit code 1:
 
+- a ``batch_id`` that is already in the monitoring logs, because ``monitor --batch-id`` would
+  then mix two runs (a failed run re-sent under the same id would count its batches twice);
+
 - a connection error, a timeout, or a 5xx (503 included) that persists after
   ``RETRY_DELAYS_S``;
 - any other status (404, 413, ...), which is not retried;
@@ -30,6 +33,7 @@ was lost (a timeout or a 5xx after logging), the second attempt logs the batch a
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -40,7 +44,7 @@ from typing import Any
 import httpx
 import pandas as pd
 from pydantic import ValidationError
-from sqlalchemy import Engine, insert
+from sqlalchemy import Engine, func, insert, select
 from sqlalchemy.exc import IntegrityError
 
 from claimfreq.contracts import env, logs, paths, schema
@@ -182,6 +186,27 @@ def parse_scored(response: httpx.Response, policy_ids: list[int]) -> PredictResp
     return scored
 
 
+def check_batch_id_unused(engine: Engine, batch_id: str) -> None:
+    """Raise ``TrafficError`` if ``batch_id`` already has rows in the monitoring logs.
+
+    Both tables count: a run of ``schema_break`` or ``out_of_bounds`` leaves rows only in
+    ``rejected_request_log``.
+    """
+    with engine.connect() as connection:
+        used = {
+            table.name: connection.execute(
+                select(func.count()).select_from(table).where(table.c.batch_id == batch_id)
+            ).scalar_one()
+            for table in (logs.prediction_log, logs.rejected_request_log)
+        }
+    if any(used.values()):
+        rows = ", ".join(f"{n} in {name}" for name, n in used.items())
+        raise TrafficError(
+            f"batch_id={batch_id} is already used ({rows}), so `monitor --batch-id` would mix "
+            "two runs. Use a new --batch-id, or omit it for <source>-<UTC time>."
+        )
+
+
 def write_ground_truth(engine: Engine, scored: PredictResponse, batch: pd.DataFrame) -> int:
     """Write one scored batch's ``ClaimNb`` and ``Exposure`` to ``ground_truth`` atomically.
 
@@ -211,6 +236,38 @@ def write_ground_truth(engine: Engine, scored: PredictResponse, batch: pd.DataFr
             f"and does the API commit before returning 200? ({engine.url.render_as_string()})"
         ) from error
     return len(rows)
+
+
+def _send_batch(
+    client: httpx.Client,
+    engine: Engine,
+    batch: pd.DataFrame,
+    batch_id: str,
+    counts: TrafficCounts,
+    sleep: Sleep,
+) -> None:
+    """Post one batch, write its ground truth if it was scored, and update ``counts``.
+
+    ``counts`` changes only once the batch is fully handled, so after a failure it describes
+    the batches that were completed.
+    """
+    body = make_body(batch, batch_id)
+    response = post_batch(client, body, sleep)
+    if response.status_code == 200:
+        scored = parse_scored(response, [p["policy_id"] for p in body["policies"]])
+        written = write_ground_truth(engine, scored, batch)
+        counts.scored_batches += 1
+        counts.scored_policies += len(batch)
+        counts.ground_truth_rows += written
+    elif response.status_code == 422:
+        counts.rejected_batches += 1
+        counts.rejected_policies += len(batch)
+    else:
+        raise TrafficError(
+            f"POST {PATH_PREDICT} returned HTTP {response.status_code}, expected 200 or "
+            f"422: {response.text[:200]}"
+        )
+    counts.batches += 1
 
 
 def send_traffic(
@@ -249,28 +306,23 @@ def send_traffic(
     counts = TrafficCounts()
     try:
         logs.create_all(engine)
+        check_batch_id_unused(engine, batch_id)
         print(
             f"send-traffic: {len(df)} policies from {path} in batches of {size}, "
             f"batch_id={batch_id}, API {client.base_url}"
         )
         wait_for_health(client, sleep)
-        for batch in batches(df, size):
-            body = make_body(batch, batch_id)
-            response = post_batch(client, body, sleep)
-            counts.batches += 1
-            if response.status_code == 200:
-                scored = parse_scored(response, [p["policy_id"] for p in body["policies"]])
-                counts.scored_batches += 1
-                counts.scored_policies += len(batch)
-                counts.ground_truth_rows += write_ground_truth(engine, scored, batch)
-            elif response.status_code == 422:
-                counts.rejected_batches += 1
-                counts.rejected_policies += len(batch)
-            else:
-                raise TrafficError(
-                    f"POST {PATH_PREDICT} returned HTTP {response.status_code}, expected 200 or "
-                    f"422: {response.text[:200]}"
-                )
+        n_batches = math.ceil(len(df) / size)
+        try:
+            for batch in batches(df, size):
+                _send_batch(client, engine, batch, batch_id, counts, sleep)
+        except TrafficError as error:
+            # Say how far the run got, so a half-finished run is not re-sent under the same id.
+            raise TrafficError(
+                f"{error} (after {counts.batches} of {n_batches} batches; "
+                f"{counts.ground_truth_rows} ground_truth rows already written under "
+                f"batch_id={batch_id}; re-run with a new --batch-id)"
+            ) from error
     finally:
         engine.dispose()
         if own_client:
