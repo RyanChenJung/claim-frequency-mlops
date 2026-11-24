@@ -102,6 +102,13 @@ def test_code_deps_are_the_module_and_the_schema(stages, name):
 
 
 @pytest.mark.parametrize("name", EXPECTED)
+def test_stage_has_only_the_expected_keys(stages, name):
+    # No frozen, always_changed, wdir, or other stage keys.
+    expected = {"cmd", "deps", "outs"} | ({"params"} if EXPECTED[name]["params"] else set())
+    assert set(stages[name]) == expected
+
+
+@pytest.mark.parametrize("name", EXPECTED)
 def test_params_are_the_sections_the_stage_reads(stages, name):
     listed = stages[name].get("params", [])
     assert listed == EXPECTED[name]["params"]

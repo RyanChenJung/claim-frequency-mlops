@@ -3,6 +3,9 @@
 # Each stage lists the code it runs and contracts/schema.py, which every stage validates against
 # (ingest also sets the raw dtypes from it), so a schema change re-runs the pipeline. `params`
 # lists the params.yaml sections each stage reads; tests/test_dvc_yaml.py guards this file.
+# Library versions are an input DVC cannot see: the parquet footer records the pandas and pyarrow
+# versions, so a PR that changes numpy, pandas, pyarrow, or scikit-learn in uv.lock runs
+# `uv run dvc repro --force` and commits dvc.lock in the same PR (a plain repro sees no change).
 stages:
   ingest:
     cmd: claimfreq ingest
