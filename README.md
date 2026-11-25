@@ -40,7 +40,7 @@ These steps reproduce the whole pipeline on one machine, from a fresh clone. Ste
 
 ### 0. Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/), with at least **8 GB** of memory in its settings. The full stack (Postgres, MLflow, Airflow, the API, and the Evidently UI) needs about 4 GB.
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/), with at least **8 GB** of memory in its settings. The full stack (Postgres, MLflow, Airflow, the API, and the Evidently UI) uses about 2.5 GB, plus 1–2 GB for the trainer container while `train` runs.
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) **0.13.9 or newer within 0.13**. An older uv stops with a version error; `uv self update` fixes it. uv installs Python 3.12 itself.
 - git. On macOS, also `brew install libomp` (LightGBM and XGBoost need it).
 
