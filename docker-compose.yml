@@ -131,7 +131,9 @@ services:
   # The FastAPI app (docs/contracts.md, API). The "api" profile keeps a plain
   # `docker compose up` from starting it, so port 8000 stays free for a dev server on the host.
   # `docker compose up -d --build api` starts it with both of its dependencies;
-  # --build matters, because the image copies the source in at build time.
+  # --build matters, because the image copies the source in at build time. After a code
+  # change, use `docker compose build api && docker compose up -d api`: `up --build` also
+  # rebuilds mlflow's image, and the new image ID makes compose recreate that container.
   api:
     profiles: ["api"]
     build:

@@ -93,7 +93,7 @@ docker compose up -d --build api                # adds the API
 - Airflow: <http://localhost:8080>, with no login. It is only reachable from this machine.
 - API: <http://localhost:8000/docs>. Until the API has loaded a champion (step 6), `/health` answers HTTP 503 and `docker compose ps` lists `api` as unhealthy; both are expected.
   - The API is in the `api` profile, so a plain `docker compose up -d` leaves port 8000 free for a dev server. Naming the service, as above, starts it without `--profile api`.
-  - The image copies the source in at build time. After a code change, run `docker compose up -d --build api` again; `docker compose restart api` keeps the old code.
+  - The image copies the source in at build time, so `docker compose restart api` keeps the old code. After a code change, run `docker compose build api && docker compose up -d api`. Running `up -d --build api` again also recreates the `mlflow` container, which restarts MLflow, even in the middle of a training run.
 - Both DAGs start paused, and a paused DAG runs nothing: a manual trigger just waits in the queue. Unpause them once:
 
 ```bash
