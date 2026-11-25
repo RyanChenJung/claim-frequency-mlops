@@ -27,8 +27,8 @@ dependencies = [
 claimfreq = "claimfreq.cli:main"
 
 [dependency-groups]
-# Test and lint tools, never installed in an image. API test dependencies (for example httpx,
-# which FastAPI's TestClient needs) go here too.
+# Test, lint, and analysis tools (matplotlib for scripts/eda.py), never installed in an image.
+# API test dependencies (for example httpx, which FastAPI's TestClient needs) go here too.
 dev = [
     "matplotlib>=3.11.2",
     "pytest",

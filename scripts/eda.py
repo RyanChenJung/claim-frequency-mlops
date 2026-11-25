@@ -20,9 +20,10 @@ Observed frequency is claims per policy-year, ``sum(ClaimNb) / sum(Exposure)`` p
 quantity a Poisson model with an exposure offset estimates. It is not the mean of each
 policy's ``ClaimNb / Exposure``, which short policies would dominate.
 
-Re-runs on the same data write byte-identical files: fixed figure sizes, no timestamps, and
-no matplotlib version in the PNG metadata. The script uses matplotlib's ``Figure`` API rather
-than ``pyplot``, so it needs no GUI backend and keeps no global figure state.
+Re-runs on the same data and library versions write byte-identical files: fixed figure
+sizes, no timestamps, and no matplotlib version in the PNG metadata. The script uses
+matplotlib's ``Figure`` API rather than ``pyplot``, so it needs no GUI backend and keeps no
+global figure state.
 """
 
 from __future__ import annotations
@@ -46,8 +47,9 @@ DEFAULT_OUT_DIR = Path("docs/eda")
 
 # Band edges: each band runs from one edge up to the next edge minus 1, and the last one is
 # open-ended. They are defined here, not read from params.yaml, because a key that two roles
-# read becomes a contract key (docs/contracts.md, Params). The DrivAge edges equal the GLM's
-# `training.glm.drivage_edges` today, so the plot shows the bands the GLM uses.
+# read becomes a contract key (docs/contracts.md, Params). The DrivAge edges are 18, the
+# schema's lower bound, followed by the GLM's `training.glm.drivage_edges` as of today, so the
+# plot shows the bands the GLM uses.
 BAND_EDGES: dict[str, list[int]] = {
     "DrivAge": [18, 21, 25, 30, 40, 50, 60, 70],  # 18-20, 21-24, 25-29, ..., 70+
     # 50 is the best level; 100, neither bonus nor malus, is where a new driver starts.
@@ -71,8 +73,9 @@ AXIS_LABELS = {
 # assumption every band has about the same frequency; the table shows whether it holds.
 EXPOSURE_EDGES = [0.1, 0.25, 0.5, 0.75]
 
-# 16:9, so each plot fills a slide. With no "Software" key, a matplotlib upgrade alone does
-# not change the PNG bytes.
+# 16:9, so each plot fills a slide. Without the "Software" key, the PNG metadata holds no
+# matplotlib version. A matplotlib or Pillow upgrade can still change the bytes, through the
+# rendering or the compression, so re-run the script after one.
 FIGSIZE = (8, 4.5)
 DPI = 150
 PNG_METADATA = {"Software": None}
@@ -200,6 +203,7 @@ def changed_rows(before: pd.DataFrame, after: pd.DataFrame, column: str) -> int:
 
 
 def _round(value: float) -> float:
+    """Round to ``DECIMALS`` places as a plain float, for summary.json."""
     return round(float(value), DECIMALS)
 
 
@@ -283,11 +287,13 @@ def summarize(
 
 
 def _figure() -> tuple[Figure, Any]:
+    """Return a new slide-sized figure and its single axes, without pyplot."""
     figure = Figure(figsize=FIGSIZE, dpi=DPI, layout="constrained")
     return figure, figure.subplots()
 
 
 def _save(figure: Figure, path: Path) -> Path:
+    """Write ``figure`` as a PNG at the fixed DPI, without the version metadata."""
     figure.savefig(path, dpi=DPI, metadata=PNG_METADATA)
     return path
 

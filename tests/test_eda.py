@@ -236,7 +236,8 @@ def test_rerun_writes_byte_identical_files(data_dir, tmp_path):
     for name in OUTPUT_FILES:
         first = (tmp_path / "first" / name).read_bytes()
         assert first == (tmp_path / "second" / name).read_bytes()
-        # No matplotlib version in the PNG metadata, so an upgrade alone changes nothing.
+        # No matplotlib version in the PNG metadata. Library upgrades can still change the
+        # bytes, but the version string alone never does.
         assert b"Software" not in first
 
 
