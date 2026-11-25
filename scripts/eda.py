@@ -49,12 +49,19 @@ DEFAULT_OUT_DIR = Path("docs/eda")
 # `training.glm.drivage_edges` today, so the plot shows the bands the GLM uses.
 BAND_EDGES: dict[str, list[int]] = {
     "DrivAge": [18, 21, 25, 30, 40, 50, 60, 70],  # 18-20, 21-24, 25-29, ..., 70+
-    "BonusMalus": [50, 51, 60, 70, 80, 90, 100, 125],  # 50 is the best level
+    # 50 is the best level; 100, neither bonus nor malus, is where a new driver starts.
+    "BonusMalus": [50, 51, 60, 70, 80, 90, 100, 101, 125],
     "VehAge": [0, 1, 2, 3, 6, 11, 16, 21],  # 0, 1, 2, 3-5, 6-10, 11-15, 16-20, 21+
 }
 # Factors plotted as they are, one bar per category, in this order (rural A to urban F).
 CATEGORY_ORDER: dict[str, list[str]] = {"Area": [a.value for a in schema.Area]}
 FREQUENCY_FACTORS = ["DrivAge", "BonusMalus", "VehAge", "Area"]
+
+# Upper edges (inclusive, in years) of the exposure bands in summary.json's
+# `frequency_by_exposure`. Policies at exactly the cap get a band of their own. Our models
+# assume that claims grow in proportion to exposure (the Poisson offset), and under that
+# assumption every band has about the same frequency; the table shows whether it holds.
+EXPOSURE_EDGES = [0.1, 0.25, 0.5, 0.75]
 
 # 16:9, so each plot fills a slide. With no "Software" key, a matplotlib upgrade alone does
 # not change the PNG bytes.
@@ -90,6 +97,28 @@ def assign_bands(values: pd.Series, edges: Sequence[int]) -> pd.Series:
         raise ValueError(f"{values.name} has values below the first band edge {edges[0]}")
     bands = pd.Categorical.from_codes(codes, categories=band_labels(edges), ordered=True)
     return pd.Series(bands, index=values.index, name="band")
+
+
+def exposure_bands(exposure: pd.Series, edges: Sequence[float], cap: float) -> pd.Series:
+    """Return the exposure band of each policy, as an ordered categorical with every band.
+
+    The bands are ``(0, e1]``, ``(e1, e2]``, ..., ``(e_last, cap)``, and exactly ``cap``: with
+    ``edges=[0.1, 0.25]`` and ``cap=1.0`` the labels are ``"<=0.1"``, ``"0.1-0.25"``,
+    ``">0.25, <1"``, and ``"1 (full year)"``.
+
+    Raises:
+        ValueError: if an exposure exceeds ``cap`` (``clean`` rules this out).
+    """
+    values = exposure.to_numpy()
+    if (values > cap).any():
+        raise ValueError(f"Exposure above the cap {cap:g}; run clean first")
+    labels = [f"<={edges[0]:g}"]
+    labels += [f"{low:g}-{high:g}" for low, high in zip(edges[:-1], edges[1:], strict=True)]
+    labels += [f">{edges[-1]:g}, <{cap:g}", f"{cap:g} (full year)"]
+    codes = np.searchsorted(np.asarray(edges), values, side="left")
+    codes = np.where(values == cap, len(labels) - 1, codes)
+    bands = pd.Categorical.from_codes(codes, categories=labels, ordered=True)
+    return pd.Series(bands, index=exposure.index, name="band")
 
 
 def factor_bands(df: pd.DataFrame, column: str) -> pd.Series:
@@ -191,7 +220,8 @@ def summarize(
     """Return every number the datasheet and slide a quote, grouped as summary.json is.
 
     - ``dataset``: all policies, before (raw) and after (clean) the caps.
-    - ``train``: the train split, after the caps; the plots show the same data.
+    - ``train``: the train split, after the caps; the plots show the same data. It adds the
+      frequency per exposure band, which no plot shows.
     - ``duplicates``: shares of rows sharing their exact 9-factor tuple (see the module doc).
     """
     dataset = {
@@ -226,6 +256,12 @@ def summarize(
             column: _table_records(frequency_table(train, factor_bands(train, column)))
             for column in FREQUENCY_FACTORS
         },
+        "frequency_by_exposure": _table_records(
+            frequency_table(
+                train,
+                exposure_bands(train[schema.EXPOSURE], EXPOSURE_EDGES, params.clean.exposure_cap),
+            )
+        ),
     }
     duplicates = {
         "validation_rows_matching_train": _round(cross_split_duplicate_share(train, validation)),

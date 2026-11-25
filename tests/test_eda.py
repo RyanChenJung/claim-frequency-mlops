@@ -57,6 +57,31 @@ def test_assign_bands_rejects_a_value_below_the_first_edge():
         eda.assign_bands(pd.Series([17, 30], name="DrivAge"), [18, 25])
 
 
+def test_bonus_malus_100_has_a_band_of_its_own():
+    labels = eda.band_labels(eda.BAND_EDGES["BonusMalus"])
+    assert labels[-3:] == ["100", "101-124", "125+"]
+
+
+def test_exposure_bands_split_off_the_full_year_at_the_cap():
+    exposure = pd.Series([0.05, 0.1, 0.2, 0.25, 0.8, 0.99, 1.0], name="Exposure")
+    bands = eda.exposure_bands(exposure, [0.1, 0.25], 1.0)
+    assert bands.cat.categories.tolist() == ["<=0.1", "0.1-0.25", ">0.25, <1", "1 (full year)"]
+    assert bands.tolist() == [
+        "<=0.1",
+        "<=0.1",
+        "0.1-0.25",
+        "0.1-0.25",
+        ">0.25, <1",
+        ">0.25, <1",
+        "1 (full year)",
+    ]
+
+
+def test_exposure_bands_reject_an_exposure_above_the_cap():
+    with pytest.raises(ValueError, match="above the cap"):
+        eda.exposure_bands(pd.Series([0.5, 1.5], name="Exposure"), [0.1], 1.0)
+
+
 def test_every_plotted_factor_has_bands_or_a_category_order():
     for column in eda.FREQUENCY_FACTORS:
         assert column in eda.BAND_EDGES or column in eda.CATEGORY_ORDER
@@ -196,6 +221,10 @@ def test_run_writes_six_plots_and_a_summary(data_dir, tmp_path):
     assert train["claim_nb_capped_rows"] == train["exposure_capped_rows"] == 1
     assert sum(train["claim_counts"].values()) == train["rows"]
     assert set(train["frequency_by"]) == set(eda.FREQUENCY_FACTORS)
+    by_exposure = train["frequency_by_exposure"]
+    assert len(by_exposure) == len(eda.EXPOSURE_EDGES) + 2
+    assert sum(band["policies"] for band in by_exposure) == train["rows"]
+    assert by_exposure[-1]["policies"] == round(train["full_year_share_after_cap"] * 700)
     assert train["md5"] == eda.file_md5(data_dir / paths.TRAIN)
     assert duplicates["validation_rows_matching_train"] >= 0.5
     assert 0.0 <= duplicates["test_rows_matching_train"] < 0.5
