@@ -4,6 +4,8 @@
 #   cp .env.example .env              # then fill in the required values
 #   docker compose up -d              # postgres and mlflow: enough for development
 #   open http://localhost:5001        # MLflow UI (5000 is macOS AirPlay)
+#   docker compose up -d evidently-ui # Evidently UI, in the "monitoring" profile
+#   open http://localhost:8001        # Evidently UI
 #
 # Airflow runs only on the demo machine, in the "airflow" profile (it also needs the Airflow
 # keys in .env):
@@ -104,7 +106,10 @@ services:
   # Monitoring dashboard (Role D; docs/contracts.md, Images). `claimfreq monitor` pushes one
   # Evidently snapshot per run to it, as http://evidently-ui:8000 inside compose. The image
   # version must equal evidently in uv.lock. Published on 8001, because the API uses 8000.
+  # The "monitoring" profile keeps a plain `docker compose up` from starting it. Naming the
+  # service turns the profile on, so `docker compose up -d evidently-ui` needs no --profile.
   evidently-ui:
+    profiles: ["monitoring"]
     image: evidently/evidently-service:0.7.23
     ports:
       - "127.0.0.1:8001:8000"
