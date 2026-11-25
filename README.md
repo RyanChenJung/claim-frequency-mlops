@@ -180,7 +180,7 @@ docker compose --profile airflow down -v    # also deletes the data, for a fresh
 - **uv `required-version` error**: run `uv self update`.
 - **`password authentication failed` in `docker compose logs mlflow` after you change `POSTGRES_PASSWORD`**: Postgres sets the password only on the first start of an empty volume. Put the old value back, or start fresh with `docker compose --profile airflow down -v`. That deletes every MLflow run and model version, the Airflow history, and the prediction logs, but not `data/`.
 - **Airflow tasks fail with `permission denied` on `/var/run/docker.sock` (Linux)**: the socket belongs to the `docker` group. Add that group id to `airflow-scheduler` with `group_add` in `docker-compose.yml`.
-- **A task fails with exit code 3**: that command is still a stub, and the message names the role that owns it. Exit 10 means a check failed, and exit 1 an unexpected error ([contracts: exit codes](docs/contracts.md#cli--clipy)).
+- **A task fails with exit code 3**: that command is still a stub, and the message names the role that owns it. Exit 10 means a check failed, and exit 1 an unexpected error ([contracts: exit codes](docs/contracts.md#cli--clipy)). Exit 124 means a `monitor` run hung until its 30-minute `timeout` ended it, for example on an Evidently UI that never answered. When it hangs in the Evidently push, the checks have already run: their lines are in the task log above the hang, but a failed check then sends no alert and triggers no retraining. Trigger `monitor` again once the UI answers.
 
 ## Development
 

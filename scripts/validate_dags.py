@@ -66,7 +66,13 @@ def check_retrain_wiring(monitor) -> list[str]:
     retrain = monitor.get_task("retrain_on_drift")
     if retrain.trigger_dag_id != "training":
         problems.append(f"retrain_on_drift triggers {retrain.trigger_dag_id!r}, not 'training'")
-    cases = [(10, True, True), (10, False, False), (3, True, False), (1, True, False)]
+    cases = [
+        (10, True, True),
+        (10, False, False),
+        (3, True, False),
+        (1, True, False),
+        (124, True, False),
+    ]
     for exit_code, enabled, expect_trigger in cases:
         ti = FakeTaskInstance(pulled=exit_code)
         context = {"ti": ti, "params": {"retrain_on_drift": enabled}}
@@ -110,6 +116,10 @@ def main() -> int:
     if timetable not in (None, "CronDataIntervalTimetable"):
         problems.append(f"monitor uses {timetable}, not a data-interval timetable")
     if monitor is not None:
+        # A hung run must end by itself, or every later hourly run waits behind it.
+        command = monitor.get_task("monitor").command
+        if not command.startswith("timeout "):
+            problems.append(f"monitor runs {command!r}, not under `timeout`")
         for (dag_id, task_id), rule in EXPECTED_TRIGGER_RULES.items():
             trigger_rule = bag.dags[dag_id].get_task(task_id).trigger_rule
             found_rule = str(getattr(trigger_rule, "value", trigger_rule))
