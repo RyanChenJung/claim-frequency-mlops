@@ -117,11 +117,18 @@
           "policies": 23890
         },
         {
-          "band": "100-124",
-          "claims": 1802,
-          "exposure": 6195.5711,
-          "frequency": 0.2909,
-          "policies": 17629
+          "band": "100",
+          "claims": 1194,
+          "exposure": 4416.1358,
+          "frequency": 0.2704,
+          "policies": 13797
+        },
+        {
+          "band": "101-124",
+          "claims": 608,
+          "exposure": 1779.4353,
+          "frequency": 0.3417,
+          "policies": 3832
         },
         {
           "band": "125+",
@@ -248,6 +255,50 @@
         }
       ]
     },
+    "frequency_by_exposure": [
+      {
+        "band": "<=0.1",
+        "claims": 2400,
+        "exposure": 5253.1567,
+        "frequency": 0.4569,
+        "policies": 89093
+      },
+      {
+        "band": "0.1-0.25",
+        "claims": 2632,
+        "exposure": 12220.89,
+        "frequency": 0.2154,
+        "policies": 66753
+      },
+      {
+        "band": "0.25-0.5",
+        "claims": 4490,
+        "exposure": 35979.66,
+        "frequency": 0.1248,
+        "policies": 91949
+      },
+      {
+        "band": "0.5-0.75",
+        "claims": 4202,
+        "exposure": 41215.67,
+        "frequency": 0.102,
+        "policies": 65073
+      },
+      {
+        "band": ">0.75, <1",
+        "claims": 3289,
+        "exposure": 37705.68,
+        "frequency": 0.0872,
+        "policies": 43258
+      },
+      {
+        "band": "1 (full year)",
+        "claims": 8214,
+        "exposure": 118483.0,
+        "frequency": 0.0693,
+        "policies": 118483
+      }
+    ],
     "full_year_share_after_cap": 0.2496,
     "md5": "6ccf5987bb4772e6412c4469f9384454",
     "mean_exposure_after_cap": 0.5286,
