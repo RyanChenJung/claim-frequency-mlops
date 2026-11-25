@@ -226,8 +226,10 @@ def test_run_writes_six_plots_and_a_summary(data_dir, tmp_path):
     assert sum(band["policies"] for band in by_exposure) == train["rows"]
     assert by_exposure[-1]["policies"] == round(train["full_year_share_after_cap"] * 700)
     assert train["md5"] == eda.file_md5(data_dir / paths.TRAIN)
-    assert duplicates["validation_rows_matching_train"] >= 0.5
-    assert 0.0 <= duplicates["test_rows_matching_train"] < 0.5
+    # Validation is 50 copies of train tuples plus 50 rows of its own; fake tuples never repeat.
+    assert duplicates["validation_rows_matching_train"] == 0.5
+    assert duplicates["test_rows_matching_train"] == 0.0
+    assert duplicates["train_rows_duplicated_within_train"] == 0.0
 
 
 def test_rerun_writes_byte_identical_files(data_dir, tmp_path):
