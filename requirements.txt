@@ -495,7 +495,7 @@ pyyaml==6.0.3
     #   mlflow-skinny
     #   omegaconf
     #   uvicorn
-regex==2026.11.23
+regex==2026.11.24
     # via nltk
 requests==2.34.2
     # via

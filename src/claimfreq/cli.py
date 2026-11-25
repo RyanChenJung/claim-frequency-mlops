@@ -249,6 +249,25 @@ def _split(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _send_traffic(args: argparse.Namespace) -> int:
+    """Replay a test or drift file through the API, then write ground truth for scored rows."""
+    # Imported here so `--help` and the stubs stay fast and need no pandas or httpx.
+    from claimfreq.send_traffic import TrafficError, send_traffic
+
+    try:
+        counts = send_traffic(args.source, batch_id=args.batch_id)
+    except TrafficError as error:
+        # A failed run, not a bug: the message says what went wrong, without a traceback.
+        print(f"send-traffic: error: {error}", file=sys.stderr)
+        return EXIT_ERROR
+    print(
+        f"send-traffic: {counts.batches} batches ({counts.scored_batches} scored with HTTP 200, "
+        f"{counts.rejected_batches} rejected with HTTP 422); {counts.scored_policies} policies "
+        f"scored, {counts.rejected_policies} rejected; {counts.ground_truth_rows} ground_truth rows"
+    )
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with every subcommand of the CLI contract."""
     parser = argparse.ArgumentParser(
@@ -321,7 +340,7 @@ def build_parser() -> argparse.ArgumentParser:
         "POST a data source to the API in batches of traffic.batch_size, then write "
         "ground_truth for the scored rows. Exit 0 when every batch got HTTP 200 or 422 (the "
         "counts are printed); exit 1 on connection errors or 5xx after retries.",
-        _not_implemented(ROLE_DATA),
+        _send_traffic,
     )
     send_traffic.add_argument(
         "--source",
