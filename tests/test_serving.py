@@ -128,12 +128,20 @@ def live_server(db_url):
     thread.join(timeout=5)
 
 
-def test_ground_truth_can_be_written_right_after_predict(live_server, db_url):
+def test_ground_truth_can_be_written_right_after_predict(live_server, db_url, monkeypatch):
     """The rows are committed before the 200, so the ground_truth foreign key holds.
 
     This is the contract's logging-order rule, which send-traffic relies on. It writes ground
     truth the moment each 200 arrives, as send-traffic does, several times in a row.
     """
+    real_insert = app_module._insert
+
+    def slow_insert(*args, **kwargs):
+        # Widen the race: a commit made after the 200 now loses it every time.
+        time.sleep(0.3)
+        real_insert(*args, **kwargs)
+
+    monkeypatch.setattr(app_module, "_insert", slow_insert)
     engine = make_engine(db_url)
     with httpx.Client(base_url=live_server) as http:
         for _ in range(5):
@@ -210,6 +218,21 @@ def test_invalid_json_is_rejected_and_logged_without_batch_id(client, db_url):
     assert row["error_type"] == "json_invalid"
     assert row["batch_id"] is None
     assert row["n_policies"] is None
+
+
+@pytest.mark.parametrize("raw_value", ["NaN", "Infinity", "1e400"])
+def test_nan_or_infinite_value_is_rejected_and_logged(client, db_url, raw_value):
+    # Python's JSON parser reads these as float NaN or inf, which JSON itself cannot hold.
+    body = request_body(n=1)
+    body["policies"][0]["DrivAge"] = "RAW"
+    content = json.dumps(body).replace('"RAW"', raw_value)
+    response = client.post(
+        PATH_PREDICT, content=content, headers={"Content-Type": "application/json"}
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/json"
+    assert count_rows(db_url, rejected_request_log) == 1
 
 
 def test_too_long_batch_id_is_not_logged(client, db_url):
