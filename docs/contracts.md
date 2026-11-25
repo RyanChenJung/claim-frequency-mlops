@@ -79,7 +79,7 @@ One row is one **policy**. A policy frame has 12 columns, in this canonical orde
   - The champion is a scikit-learn `Pipeline` with all preprocessing (such as categorical encoding) inside it.
   - `train` logs every candidate's fitted Pipeline in its own child run at `MODEL_ARTIFACT_PATH` (`model`), with `mlflow.sklearn` using skops serialization; its `skops_trusted_types` are listed at log time. `train` and `register` run in separate containers, so `register` registers `runs:/<best child run id>/model` rather than refitting or logging the model again.
   - The model's `requirements.txt` lists only its runtime libraries (scikit-learn, skops, numpy, pandas, pyarrow, plus the `mlflow` pin MLflow adds; lightgbm and xgboost once #16 adds them), not the whole project.
-  - It is loaded with `mlflow.pyfunc.load_model("models:/claim-frequency@champion")`.
+  - The API resolves `@champion` to a version number and loads that version with `mlflow.pyfunc.load_model("models:/claim-frequency/<version>")`.
   - Its runtime libraries are a subset of {scikit-learn, lightgbm, xgboost}. That is why the `api` dependency group carries all three ([Images](#images)).
   - The pyfunc model receives a features-only frame built with `coerce_features`.
 - **Run tags** (lineage): `git_commit`, `data_hash`, `schema_hash`.
@@ -115,12 +115,13 @@ Training and monitoring use the same code ([ADR-0002](adr/0002-poisson-deviance-
 - **422:** FastAPI's default validation body, `{"detail": [{"loc": [...], "msg": "...", "type": "..."}, ...]}`. Every 422 is also logged to `rejected_request_log`.
 - **503:** until the model has loaded, `/predict` and `/model-info` return `{"detail": "model not loaded"}`, and `/health` returns its `degraded` body.
 
-**The app** (Role D's contract; not implemented yet):
+**The app** (Role D's contract):
 
 - **Entry point:** `uvicorn claimfreq.serving.app:app --host 0.0.0.0 --port 8000`, with container port 8000.
 - **Factory:** `create_app(model: FrequencyModel | None = None, model_ref: ModelInfoResponse | None = None)`, so tests inject a model without MLflow.
 - **Dev identity.** With an injected model and no `model_ref`, the app reports name `claim-frequency`, version `"0"`, semver `"0.0.0"`, alias `dev`, and `"dev"` for every lineage field (`run_id`, `schema_hash`, `data_hash`, `git_commit`, `algorithm`); `trained_at` and `metrics` are Role D's choice. `/predict` responses and `prediction_log` rows carry the same name, version, and semver.
 - **Champion loading.** Without an injected model, the app loads `@champion` at startup. If no champion exists yet, it retries every 30 s and stays 503 until it loads one.
+- **Schema check** (not implemented yet). If the champion's `schema_hash` tag differs from `schema_hash()` in the app's code, the app does not load it. It stays 503, logs why, and retries every 30 s, so promoting a champion with a matching hash fixes it without a restart.
 - **Switching models.** After `promote`, restart the `api` container ([ADR-0007](adr/0007-semver-and-human-promotion.md)). The first champion is `1.0.0`.
 
 ### Monitoring logs — [`logs.py`](../src/claimfreq/contracts/logs.py)
@@ -306,7 +307,7 @@ Airflow 3.4.0 (`apache/airflow:3.4.0-python3.12`, which ships the docker provide
   - The exit code of `dvc repro` is DVC's own (nonzero on failure).
   - Exit code 3 is visible only for commands a DAG task runs directly (`train`, `register`, `monitor`). Under `dvc repro`, a stub stage appears as DVC's own failure.
   - `make-drift` is one DVC stage that writes all five drift files, so `dvc repro` keeps them up to date too.
-  - **Dependency for Role C.** The `dvc repro` task needs Role A's `dvc init`, `dvc.yaml`, and `dvc[s3]` in the `trainer` group. Until then, the training DAG can only be wired, not run.
+  - **Status.** Role A's DVC setup is in (#54, #59), so `dvc_repro` runs. The DAG runs end to end once `register` lands (#47); until then, `register` exits 3.
 - **`monitor` DAG:** `monitor` → `retrain_on_drift` → `monitor_failed`.
   - `monitor` runs `claimfreq monitor` and records the container's exit code in XCom (`TrainerOperator`).
   - `retrain_on_drift` runs only when `monitor` failed. It triggers the `training` DAG (run id `drift__<monitor run id>`, conf `{"triggered_by": "monitor", ...}`) only for exit 10 (a failed check) and only when the `retrain_on_drift` param is true, which is the default. A crash (1) or a stub (3) never retrains. Retraining only produces a new challenger: promotion stays manual ([ADR-0007](adr/0007-semver-and-human-promotion.md)). The rule is [`dags/retrain_policy.py`](../dags/retrain_policy.py).
@@ -387,7 +388,7 @@ Then, per role:
   python -c "from claimfreq.contracts import env, logs; e = logs.make_engine(env.get(env.MONITORING_DB_URL)); assert e.dialect.name == 'postgresql', e.url; logs.create_all(e)"
   ```
 
-  It proves the mounts (the file appears under `data/fake/` in the repo on the host), that `MONITORING_DB_URL` reached the container (the assertion fails if it fell back to the SQLite default; SQLAlchemy masks the password in the message), and that Postgres is reachable. A stub's exit code 3 reaches a DAG task only when the task runs the command directly (`train`, `register`, `monitor`); under `dvc repro`, a stub stage shows as DVC's own failure. The `dvc repro` task also needs Role A's DVC setup before it can run ([DAGs](#dags)).
+  It proves the mounts (the file appears under `data/fake/` in the repo on the host), that `MONITORING_DB_URL` reached the container (the assertion fails if it fell back to the SQLite default; SQLAlchemy masks the password in the message), and that Postgres is reachable. A stub's exit code 3 reaches a DAG task only when the task runs the command directly (`train`, `register`, `monitor`); under `dvc repro`, a stub stage shows as DVC's own failure.
 - **D. Serving and monitoring.** Start with the FastAPI app. Build it with `create_app(model=TrueFrequencyModel())`, validate with `PredictRequest`, build the model input with `coerce_features`, and log with `prediction_log_rows` to the default SQLite `MONITORING_DB_URL`. Then implement `monitor` (compare the logs with `make_reference_frame`). Use at least 20,000 fake policies per window: on fewer, the calibration check is dominated by noise and raises false alarms, even on clean traffic and on `portfolio_shift`, which keeps only part of the window. To feed the API before Role A's `send-traffic` lands, post `make_predict_request` bodies from a test.
 
 ## Changing a contract

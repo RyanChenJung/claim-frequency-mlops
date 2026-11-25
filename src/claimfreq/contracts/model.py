@@ -4,9 +4,9 @@ Producers and consumers:
 
 - Role B (Modeling) trains, logs, and registers models under these names, tags, and metric keys,
   and logs the reference dataset artifact.
-- Role D (Serving and monitoring) loads ``models:/claim-frequency@champion``, calls ``predict``
-  on a frame with exactly ``FEATURE_COLUMNS``, and loads the reference dataset from the
-  champion's run.
+- Role D (Serving and monitoring) loads the version that ``@champion`` points to, calls
+  ``predict`` on a frame with exactly ``FEATURE_COLUMNS``, and loads the reference dataset from
+  the champion's run.
 - ``ConstantFrequencyModel`` is both Role B's baseline model (every candidate must beat it) and
   Role D's stub model before any real model exists.
 
@@ -23,7 +23,8 @@ Model artifact format (what ``train`` logs, ``register`` registers, and the API 
   containers, so ``register`` registers ``runs:/<best child run id>/model`` instead of refitting.
 - The logged model has an MLflow signature inferred from the validation features, so pyfunc
   enforces the input schema (column names and dtypes of ``FEATURE_COLUMNS``).
-- It is loaded with ``mlflow.pyfunc.load_model("models:/claim-frequency@champion")``.
+- The API resolves ``@champion`` to a version number and loads that version with
+  ``mlflow.pyfunc.load_model("models:/claim-frequency/<version>")``.
 - Its runtime libraries are a subset of {scikit-learn, lightgbm, xgboost}, which is why the
   ``api`` dependency group carries all three.
 - The pyfunc model receives a features-only frame built with ``schema.coerce_features``.

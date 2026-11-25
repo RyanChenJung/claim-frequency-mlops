@@ -88,14 +88,14 @@ DTYPES: dict[str, str] = {
 NUMERIC_BOUNDS: dict[str, tuple[int, int]] = {
     "VehPower": (4, 15),  # observed 4-15: the dataset's class range
     "VehAge": (0, 100),  # observed 0-100
-    "DrivAge": (18, 100),  # observed 18-100; 18 is the French minimum driving age
+    "DrivAge": (18, 100),  # observed 18-100; 18 was the French minimum driving age (17 since 2024)
     "BonusMalus": (50, 350),  # observed 50-230; legal coefficient range is 0.50-3.50
     "Density": (1, 50_000),  # observed 1-27,000 inhabitants per km2
 }
 
 # Default clean-stage caps. params.yaml may override them (see params.py). Capping ClaimNb at 4
 # and Exposure at 1 year is the standard actuarial treatment, also used in scikit-learn's
-# Poisson regression example.
+# Tweedie regression example.
 DEFAULT_CLAIM_NB_CAP = 4
 DEFAULT_EXPOSURE_CAP = 1.0
 

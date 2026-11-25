@@ -5,8 +5,8 @@ stages:
     deps:
     - path: src/claimfreq/contracts/schema.py
       hash: md5
-      md5: b4fe3b27ebb9455f99a10de18f9a1cb4
-      size: 20836
+      md5: 1aa72fc9f209869357bef03456385cd3
+      size: 20853
     - path: src/claimfreq/ingest.py
       hash: md5
       md5: 11cbd3e3950a2fca3bcdb10e38c57f0f
@@ -29,8 +29,8 @@ stages:
       size: 3303
     - path: src/claimfreq/contracts/schema.py
       hash: md5
-      md5: b4fe3b27ebb9455f99a10de18f9a1cb4
-      size: 20836
+      md5: 1aa72fc9f209869357bef03456385cd3
+      size: 20853
     params:
       params.yaml:
         clean:
@@ -50,8 +50,8 @@ stages:
       size: 7412236
     - path: src/claimfreq/contracts/schema.py
       hash: md5
-      md5: b4fe3b27ebb9455f99a10de18f9a1cb4
-      size: 20836
+      md5: 1aa72fc9f209869357bef03456385cd3
+      size: 20853
     - path: src/claimfreq/split.py
       hash: md5
       md5: 2371fbf1699944ddb48ec4a151fae735
@@ -87,8 +87,8 @@ stages:
       size: 1900166
     - path: src/claimfreq/contracts/schema.py
       hash: md5
-      md5: b4fe3b27ebb9455f99a10de18f9a1cb4
-      size: 20836
+      md5: 1aa72fc9f209869357bef03456385cd3
+      size: 20853
     - path: src/claimfreq/make_drift.py
       hash: md5
       md5: 7e4b9e857cc0bc121865d11421552b8d
