@@ -14,6 +14,7 @@ to the data version a git commit points to.
   Locally, a failure means the files on disk are not the version this ``dvc.lock`` points to.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -66,4 +67,13 @@ def test_file_on_disk_matches_its_md5_in_dvc_lock(path, md5):
         f"{path} differs from the version dvc.lock records. Run `uv run dvc pull` to fetch that "
         "version, or `uv run dvc repro` to rebuild it. If a rebuild changes dvc.lock with no "
         "code, params, or uv.lock change, that is a reproducibility bug: report it, don't commit."
+    )
+
+
+def test_committed_eda_summary_matches_the_locked_train_split():
+    # Data-free, so it runs in CI: a dvc.lock with a new train.parquet md5 can't land without a
+    # re-run of the EDA (#29).
+    summary = json.loads((REPO / "docs/eda/summary.json").read_text())
+    assert summary["train"]["md5"] == LOCKED_OUT_MD5["data/splits/train.parquet"], (
+        "re-run `uv run python scripts/eda.py` and commit docs/eda/"
     )
