@@ -36,6 +36,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from matplotlib.figure import Figure
+from matplotlib.ticker import FuncFormatter, StrMethodFormatter
 
 from claimfreq.contracts import paths, schema
 from claimfreq.contracts.model import file_md5
@@ -56,6 +57,13 @@ BAND_EDGES: dict[str, list[int]] = {
 # Factors plotted as they are, one bar per category, in this order (rural A to urban F).
 CATEGORY_ORDER: dict[str, list[str]] = {"Area": [a.value for a in schema.Area]}
 FREQUENCY_FACTORS = ["DrivAge", "BonusMalus", "VehAge", "Area"]
+# x-axis labels with meaning and units, so a plot reads on its own on a slide.
+AXIS_LABELS = {
+    "DrivAge": "Driver age (years)",
+    "BonusMalus": "Bonus-malus level (50 = best, 100 = new driver)",
+    "VehAge": "Vehicle age (years)",
+    "Area": "Area, by population density (A = rural, F = urban centre)",
+}
 
 # Upper edges (inclusive, in years) of the exposure bands in summary.json's
 # `frequency_by_exposure`. Policies at exactly the cap get a band of their own. Our models
@@ -285,14 +293,30 @@ def _save(figure: Figure, path: Path) -> Path:
 
 
 def plot_claim_counts(train: pd.DataFrame, path: Path, claim_nb_cap: int) -> Path:
-    """Bar chart of the share of policies per claim count, on a log axis with % labels."""
+    """Points for the share of policies per claim count, on a log axis with % labels.
+
+    Points, not bars: on a log axis a bar's height depends on where the axis starts, so the
+    zero-claim bar would look barely taller than the one-claim bar at 20 times the share.
+    """
     shares = claim_count_shares(train)
+    counts = shares.index.to_numpy()
     figure, ax = _figure()
-    bars = ax.bar(shares.index.astype(str), shares.to_numpy(), color="C0")
-    # Three significant digits, so the rare counts do not print as 0.00%.
-    ax.bar_label(bars, labels=[f"{100 * s:.3g}%" for s in shares], padding=2)
+    ax.plot(counts, shares.to_numpy(), "o", color="C0", markersize=9)
+    for count, share in zip(counts, shares, strict=True):
+        # Three significant digits, kept when trailing (95.0%), so rare counts are not 0.00%.
+        ax.annotate(
+            f"{100 * share:#.3g}%",
+            (count, share),
+            textcoords="offset points",
+            xytext=(0, 8),
+            ha="center",
+        )
+    ax.set_xticks(counts)
+    ax.set_xlim(counts.min() - 0.5, counts.max() + 0.5)
     ax.set_yscale("log")
-    ax.set_ylim(top=3)  # headroom above the tallest bar's label
+    ax.set_ylim(min(1e-5, shares.min() / 3), 3)  # headroom above the top label
+    # PercentFormatter would print 0.1%, 0.01%, and 0.001% all as "0%".
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{100 * y:g}%"))
     ax.set_xlabel(f"Claims in the policy period (ClaimNb, capped at {claim_nb_cap})")
     ax.set_ylabel("Share of policies (log scale)")
     ax.set_title(f"Claim counts (train): {shares.get(0, 0.0):.1%} of policies have no claim")
@@ -314,28 +338,40 @@ def plot_exposure(train: pd.DataFrame, path: Path, capped_rows: int, exposure_ca
     )
     ax.set_xlabel(f"Exposure (years, capped at {exposure_cap:g})")
     ax.set_ylabel("Policies")
+    ax.yaxis.set_major_formatter(StrMethodFormatter("{x:,.0f}"))
     ax.set_title("Exposure per policy (train)")
     return _save(figure, path)
 
 
 def plot_frequency(train: pd.DataFrame, column: str, path: Path) -> Path:
-    """Observed frequency per band (line, left axis) over exposure per band (bars, right)."""
+    """Observed frequency per band (line, left axis) over exposure per band (bars, right).
+
+    Each tick label also gives the band's share of exposure, since a thin band's bar can be
+    only a few pixels tall.
+    """
     table = frequency_table(train, factor_bands(train, column))
     x = np.arange(len(table))
+    exposure_share = table["exposure"] / table["exposure"].sum()
     figure, ax = _figure()
     bars_ax = ax.twinx()
-    bars_ax.bar(x, table["exposure"], color="lightgrey", label="Exposure")
+    # Outlined bars and a black average line keep their contrast on a projector.
+    bars_ax.bar(x, table["exposure"], color="lightgrey", edgecolor="dimgrey", label="Exposure")
     # Draw the frequency axis above the bars, with a see-through background.
     ax.set_zorder(bars_ax.get_zorder() + 1)
     ax.patch.set_visible(False)
     ax.plot(x, table["frequency"], marker="o", color="C0", label="Observed frequency")
     average = portfolio_frequency(train)
-    ax.axhline(average, color="grey", linestyle="--", label=f"Train average ({average:.3f})")
-    ax.set_xticks(x, [str(band) for band in table.index])
+    ax.axhline(average, color="black", linestyle="--", label=f"Train average ({average:.3f})")
+    tick_labels = [
+        f"{band}\n{100 * share:.1f}%"
+        for band, share in zip(table.index, exposure_share, strict=True)
+    ]
+    ax.set_xticks(x, tick_labels)
     ax.set_ylim(bottom=0)
-    ax.set_xlabel(column)
+    ax.set_xlabel(f"{AXIS_LABELS[column]}; under each band, its share of exposure")
     ax.set_ylabel("Claims per policy-year")
     bars_ax.set_ylabel("Exposure (policy-years)")
+    bars_ax.yaxis.set_major_formatter(StrMethodFormatter("{x:,.0f}"))
     handles, labels = ax.get_legend_handles_labels()
     bar_handles, bar_labels = bars_ax.get_legend_handles_labels()
     # Below the axes, so it never covers a point or a bar.
