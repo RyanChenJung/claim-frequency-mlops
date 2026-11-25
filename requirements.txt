@@ -37,6 +37,7 @@ antlr4-python3-runtime==4.9.3
 anyio==4.16.0
     # via
     #   fastapi
+    #   httpx
     #   mlflow-skinny
     #   starlette
 appdirs==1.4.4
@@ -70,6 +71,8 @@ celery==5.7.0
 certifi==2026.10.23
     # via
     #   databricks-sdk
+    #   httpcore
+    #   httpx
     #   requests
 cffi==2.1.1
     # via
@@ -213,7 +216,12 @@ gto==1.10.1
 gunicorn==26.2.0 ; sys_platform != 'win32'
     # via mlflow
 h11==0.16.0
-    # via uvicorn
+    # via
+    #   httpcore
+    #   uvicorn
+httpcore==1.0.9
+    # via httpx
+httpx==0.28.1
 huey==3.5.4
     # via mlflow
 hydra-core==1.3.8
@@ -221,6 +229,7 @@ hydra-core==1.3.8
 idna==3.20
     # via
     #   anyio
+    #   httpx
     #   requests
     #   yarl
 importlib-metadata==10.2.0

@@ -369,11 +369,13 @@ api = [
 ]
 dev = [
     { name = "httpx" },
+    { name = "matplotlib" },
     { name = "pytest" },
     { name = "ruff" },
 ]
 trainer = [
     { name = "dvc", extra = ["s3"] },
+    { name = "httpx" },
     { name = "mlflow" },
     { name = "skops" },
 ]
@@ -401,11 +403,13 @@ api = [
 ]
 dev = [
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "matplotlib", specifier = ">=3.11.2" },
     { name = "pytest" },
     { name = "ruff" },
 ]
 trainer = [
     { name = "dvc", extras = ["s3"], specifier = ">=3,<4" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "mlflow", specifier = "==3.18.0" },
     { name = "skops", specifier = ">=0.16.0" },
 ]

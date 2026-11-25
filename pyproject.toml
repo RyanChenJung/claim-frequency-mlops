@@ -27,18 +27,20 @@ dependencies = [
 claimfreq = "claimfreq.cli:main"
 
 [dependency-groups]
-# Test and lint tools, never installed in an image. API test dependencies (for example httpx,
-# which FastAPI's TestClient needs) go here too.
+# Test, lint, and analysis tools (matplotlib for scripts/eda.py), never installed in an image.
+# API test dependencies (for example httpx, which FastAPI's TestClient needs) go here too.
 dev = [
     "httpx>=0.28.1",
+    "matplotlib>=3.11.2",
     "pytest",
     "ruff",
 ]
 # Installed with the base dependencies in docker/trainer.Dockerfile (Role C). Role A adds
-# dvc[s3]; Role B adds mlflow, flaml[automl], lightgbm, xgboost, skops; Role D adds evidently
-# and an HTTP client. See docs/contracts.md, Images.
+# dvc[s3] and httpx (for send-traffic); Role B adds mlflow, flaml[automl], lightgbm, xgboost,
+# skops; Role D adds evidently. See docs/contracts.md, Images.
 trainer = [
     "dvc[s3]>=3,<4",
+    "httpx>=0.28.1",
     "mlflow==3.18.0",
     "skops>=0.16.0",
 ]
