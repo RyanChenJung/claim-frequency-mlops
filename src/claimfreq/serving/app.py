@@ -18,6 +18,7 @@ The bodies and paths are fixed in ``claimfreq.contracts.api``.
 
 import json
 import logging
+import math
 import threading
 import uuid
 from collections.abc import AsyncIterator
@@ -30,7 +31,6 @@ import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import insert
@@ -62,6 +62,23 @@ from claimfreq.contracts.schema import FEATURE_COLUMNS, coerce_features
 from claimfreq.serving.champion import load_champion
 
 logger = logging.getLogger(__name__)
+
+
+def _configure_logging() -> None:
+    """Print the app's INFO lines (like the loaded champion) in ``docker logs``.
+
+    uvicorn configures only its own loggers, so without this the root's WARNING level drops
+    them. Runs once at import, not in ``lifespan``, which runs for every ``create_app``.
+    """
+    package_logger = logging.getLogger("claimfreq")
+    package_logger.setLevel(logging.INFO)
+    if not package_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        package_logger.addHandler(handler)
+
+
+_configure_logging()
 
 # How long to wait before trying to load the champion again.
 CHAMPION_RETRY_SECONDS = 30.0
@@ -123,6 +140,17 @@ def _load_champion_until_done(state: _State, stop: threading.Event) -> None:
         state.loaded = LoadedModel(model, info)
         logger.info("Loaded %s version %s (semver %s).", info.name, info.version, info.semver)
         return
+
+
+def _finite(value: Any) -> Any:
+    """Replace NaN and infinite floats with their string form, because JSON has no NaN."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, list):
+        return [_finite(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _finite(item) for key, item in value.items()}
+    return value
 
 
 def _rejected_row(errors: list[dict[str, Any]], body: Any, received_at: datetime) -> dict[str, Any]:
@@ -189,8 +217,10 @@ def create_app(
     async def log_rejected_request(request: Request, error: RequestValidationError) -> Response:
         """Return FastAPI's default 422 body, and write the rejection to the log."""
         received_at = datetime.now(UTC)
-        response = await request_validation_exception_handler(request, error)
-        row = _rejected_row(jsonable_encoder(error.errors()), error.body, received_at)
+        # A NaN or Infinity in the body would make the JSON response fail, so turn it into text.
+        errors = _finite(jsonable_encoder(error.errors()))
+        response = JSONResponse(status_code=422, content={"detail": errors})
+        row = _rejected_row(errors, error.body, received_at)
         await run_in_threadpool(_insert, state.engine, rejected_request_log, [row])
         return response
 
