@@ -8,8 +8,9 @@ It reads the pipeline's files and writes six PNGs and ``summary.json`` to ``docs
 (``--out-dir`` changes the folder):
 
 - The plots and the ``train`` figures use the train split only, so nothing that could shape a
-  modelling choice looks at validation or test data. Train is post-cap (``ClaimNb`` at most 4,
-  ``Exposure`` at most 1.0 year).
+  modelling choice looks at validation or test data. Train is post-cap: ``ClaimNb`` and
+  ``Exposure`` are clipped at ``clean.claim_nb_cap`` and ``clean.exposure_cap``, which the
+  script reads from params.yaml (Role A's own keys).
 - The ``dataset`` figures describe all 678,013 policies, read from the raw and clean files,
   so the datasheet can quote the tails that the caps remove.
 - The ``duplicates`` figures read all three splits: the share of validation and test rows
@@ -38,6 +39,7 @@ from matplotlib.figure import Figure
 
 from claimfreq.contracts import paths, schema
 from claimfreq.contracts.model import file_md5
+from claimfreq.contracts.params import Params, load_params
 
 DEFAULT_OUT_DIR = Path("docs/eda")
 
@@ -184,6 +186,7 @@ def summarize(
     train: pd.DataFrame,
     validation: pd.DataFrame,
     test: pd.DataFrame,
+    params: Params,
 ) -> dict[str, Any]:
     """Return every number the datasheet and slide a quote, grouped as summary.json is.
 
@@ -214,7 +217,9 @@ def summarize(
             str(k): int(v) for k, v in train[schema.CLAIM_NB].value_counts().sort_index().items()
         },
         "mean_exposure_after_cap": _round(train[schema.EXPOSURE].mean()),
-        "full_year_share_after_cap": _round((train[schema.EXPOSURE] == 1.0).mean()),
+        "full_year_share_after_cap": _round(
+            (train[schema.EXPOSURE] == params.clean.exposure_cap).mean()
+        ),
         "claim_nb_capped_rows": changed_rows(raw, train, schema.CLAIM_NB),
         "exposure_capped_rows": changed_rows(raw, train, schema.EXPOSURE),
         "frequency_by": {
@@ -243,7 +248,7 @@ def _save(figure: Figure, path: Path) -> Path:
     return path
 
 
-def plot_claim_counts(train: pd.DataFrame, path: Path) -> Path:
+def plot_claim_counts(train: pd.DataFrame, path: Path, claim_nb_cap: int) -> Path:
     """Bar chart of the share of policies per claim count, on a log axis with % labels."""
     shares = claim_count_shares(train)
     figure, ax = _figure()
@@ -252,18 +257,18 @@ def plot_claim_counts(train: pd.DataFrame, path: Path) -> Path:
     ax.bar_label(bars, labels=[f"{100 * s:.3g}%" for s in shares], padding=2)
     ax.set_yscale("log")
     ax.set_ylim(top=3)  # headroom above the tallest bar's label
-    ax.set_xlabel("Claims in the policy period (ClaimNb, capped at 4)")
+    ax.set_xlabel(f"Claims in the policy period (ClaimNb, capped at {claim_nb_cap})")
     ax.set_ylabel("Share of policies (log scale)")
     ax.set_title(f"Claim counts (train): {shares.get(0, 0.0):.1%} of policies have no claim")
     return _save(figure, path)
 
 
-def plot_exposure(train: pd.DataFrame, path: Path, capped_rows: int) -> Path:
-    """Histogram of exposure, with the full-year spike explained in a note."""
+def plot_exposure(train: pd.DataFrame, path: Path, capped_rows: int, exposure_cap: float) -> Path:
+    """Histogram of exposure up to the cap, with the full-year spike explained in a note."""
     exposure = train[schema.EXPOSURE]
     figure, ax = _figure()
-    ax.hist(exposure, bins=50, range=(0.0, 1.0), color="C0")
-    full_year = (exposure == 1.0).mean()
+    ax.hist(exposure, bins=50, range=(0.0, exposure_cap), color="C0")
+    full_year = (exposure == exposure_cap).mean()
     ax.text(
         0.02,
         0.95,
@@ -271,7 +276,7 @@ def plot_exposure(train: pd.DataFrame, path: Path, capped_rows: int) -> Path:
         transform=ax.transAxes,
         va="top",
     )
-    ax.set_xlabel("Exposure (years, capped at 1.0)")
+    ax.set_xlabel(f"Exposure (years, capped at {exposure_cap:g})")
     ax.set_ylabel("Policies")
     ax.set_title("Exposure per policy (train)")
     return _save(figure, path)
@@ -306,12 +311,18 @@ def plot_frequency(train: pd.DataFrame, column: str, path: Path) -> Path:
 # --- Entry point ---------------------------------------------------------------------------
 
 
-def run(out_dir: Path = DEFAULT_OUT_DIR) -> dict[str, Any]:
+def run(out_dir: Path = DEFAULT_OUT_DIR, params: Params | None = None) -> dict[str, Any]:
     """Read the pipeline's files under ``DATA_DIR``, write the plots and summary.json.
+
+    Args:
+        out_dir: Folder for the six PNGs and summary.json.
+        params: Loaded ``params.yaml``, for the caps; read from the repo root when omitted.
 
     Returns:
         The summary that was written to ``out_dir / "summary.json"``.
     """
+    if params is None:
+        params = load_params()
     raw = schema.coerce_frame(pd.read_parquet(paths.data_path(paths.RAW)))
     clean = pd.read_parquet(paths.data_path(paths.PROCESSED))
     train_path = paths.data_path(paths.TRAIN)
@@ -319,14 +330,19 @@ def run(out_dir: Path = DEFAULT_OUT_DIR) -> dict[str, Any]:
     validation = pd.read_parquet(paths.data_path(paths.VALIDATION))
     test = pd.read_parquet(paths.data_path(paths.TEST))
 
-    summary = summarize(raw, clean, train, validation, test)
+    summary = summarize(raw, clean, train, validation, test, params)
     # The data_hash lineage tag (model.file_md5), also recorded for train.parquet in dvc.lock,
     # so the committed plots name the exact data version that produced them.
     summary["train"]["md5"] = file_md5(train_path)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    plot_claim_counts(train, out_dir / "claim_count.png")
-    plot_exposure(train, out_dir / "exposure.png", summary["train"]["exposure_capped_rows"])
+    plot_claim_counts(train, out_dir / "claim_count.png", params.clean.claim_nb_cap)
+    plot_exposure(
+        train,
+        out_dir / "exposure.png",
+        summary["train"]["exposure_capped_rows"],
+        params.clean.exposure_cap,
+    )
     for column in FREQUENCY_FACTORS:
         plot_frequency(train, column, out_dir / f"freq_{column.lower()}.png")
     text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
