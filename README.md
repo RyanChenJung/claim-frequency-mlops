@@ -35,57 +35,63 @@ Predict annual claim frequency (`ClaimNb / Exposure`) from driver, vehicle, and 
 
 ## Architecture
 
-Every pipeline step is a `claimfreq` command in the `trainer` image ([ADR-0003](docs/adr/0003-airflow-with-docker-operator.md)). Airflow runs those commands with DockerOperator. Humans only promote a model and run the final test evaluation ([ADR-0007](docs/adr/0007-semver-and-human-promotion.md)).
+Every pipeline step is a `claimfreq` command in the `trainer` image, except `dvc_repro`, which runs `dvc repro` in it; Airflow runs that image with DockerOperator ([ADR-0003](docs/adr/0003-airflow-with-docker-operator.md)). Humans make the two decisions, `promote` and `evaluate-test` ([ADR-0007](docs/adr/0007-semver-and-human-promotion.md)); in the demo they also trigger the DAGs and run `send-traffic`.
 
 ```mermaid
 flowchart LR
     openml[("OpenML 41214")]
-    subgraph dvc["DVC stages: dvc.yaml / dvc.lock (Role A)"]
+    subgraph dvc["DVC stages, dvc.yaml / dvc.lock (A)"]
         ingest["ingest"] --> clean["clean"] --> split["split"] --> drift["make-drift<br/>5 drift scenarios"]
     end
     openml --> ingest
-    dvc -- "dvc push / pull" --> dagshub[("DagsHub remote")]
+    dvc -. "manual dvc push / pull,<br/>personal token" .-> dagshub[("DagsHub remote")]
 
-    subgraph airflow["Airflow (Role C)"]
-        tdag["training DAG<br/>dvc_repro → train → register"]
-        mdag["monitor DAG<br/>monitor → retrain_on_drift"]
+    subgraph airflow["Airflow (C)"]
+        tdag["training DAG, manual<br/>dvc_repro → train → register"]
+        mdag["monitor DAG, hourly<br/>monitor → retrain_on_drift → monitor_failed"]
     end
-    image[["trainer image<br/>claimfreq CLI"]]
+    image[["trainer image (C)<br/>claimfreq CLI"]]
     tdag -- DockerOperator --> image
     mdag -- DockerOperator --> image
     image -. "dvc_repro" .-> dvc
     split -- "splits/train, validation" --> image
 
-    subgraph mlflow["MLflow tracking and registry"]
-        runs[("experiment claim-frequency<br/>train: constant, GLM, LightGBM, FLAML")]
-        registry[("registry claim-frequency<br/>@challenger, @champion")]
+    subgraph mlflow["MLflow (C)"]
+        runs[("experiment claim-frequency<br/>train (B): constant, GLM, LightGBM, FLAML")]
+        registry[("registry claim-frequency<br/>register (B): @challenger<br/>promote (B): @champion")]
     end
     image -- "train: runs, metrics, models" --> runs
     image -- "register: version + reference dataset" --> registry
-    human(["human"]) -- "promote --version N<br/>evaluate-test" --> registry
+    human(["human"]) -- "promote --version N" --> registry
+    evaluate["evaluate-test (B)<br/>test_* on the champion's run"]
+    human --> evaluate
+    split -- "splits/test" --> evaluate
+    registry -- "@champion" --> evaluate
 
-    subgraph serving["Serving and monitoring (Role D)"]
+    subgraph serving["Serving and monitoring (D)"]
         api["FastAPI api<br/>/predict /health /model-info"]
-        pg[("Postgres monitoring DB<br/>prediction_log, rejected_request_log,<br/>ground_truth")]
         evidently["Evidently UI"]
         alert["alert: red task,<br/>Discord webhook if set"]
     end
+    postgres[("Postgres (C)<br/>airflow, mlflow, monitoring DBs<br/>prediction_log, rejected_request_log (D)<br/>ground_truth (A)")]
     registry -- "loads @champion at startup" --> api
-    traffic["send-traffic<br/>test or drift file"] -- "POST /predict" --> api
+    traffic["send-traffic (A)<br/>test or drift file"] -- "POST /predict" --> api
     split -- "splits/test" --> traffic
     drift --> traffic
-    api -- logs --> pg
-    traffic -- "writes ground_truth" --> pg
-    pg -- "monitor reads the window" --> image
+    api -- logs --> postgres
+    traffic -- "writes ground_truth" --> postgres
+    airflow -. metadata .- postgres
+    mlflow -. "backend store" .- postgres
+    postgres -- "monitor reads the window" --> image
     registry -- "champion's reference dataset" --> image
     image -- "monitor: snapshots" --> evidently
-    image -- "monitor: exit 10" --> alert
-    alert -. "retrain_on_drift: trigger" .-> tdag
+    image -- "monitor: exit 1, 3 or 10" --> alert
+    mdag -. "retrain_on_drift:<br/>exit 10 only" .-> tdag
 ```
 
-- **Data path.** `dvc repro` rebuilds the splits and drift files from OpenML; `dvc pull` fetches the same versions from DagsHub.
-- **Training and registry.** The `training` DAG runs `dvc_repro → train → register`. `register` only produces a `challenger`. Moving `champion` is a human `promote`, after which the API is restarted to serve it.
-- **Serving and monitoring.** The API logs every prediction and every rejected request. `send-traffic` replays a file and then writes its delayed `ground_truth`. The `monitor` DAG compares that window with the champion's reference dataset, pushes snapshots to the Evidently UI, and fails (exit 10) when a check fails. Only then may it trigger the `training` DAG, which again ends at a new challenger.
+- **Data path.** `dvc repro` rebuilds the splits and drift files from OpenML; teammates can `dvc pull` the same versions from DagsHub with a personal token (graders use `dvc repro`, since DagsHub denies anonymous reads, [ADR-0004](docs/adr/0004-dvc-with-dagshub-remote.md)).
+- **Training and registry.** The `training` DAG runs `dvc_repro → train → register`. `register` only produces a `challenger`. Moving `champion` is a human `promote`, after which the API is restarted to serve it. `evaluate-test` is the only reader of `splits/test` besides `send-traffic`.
+- **Serving and monitoring.** The API logs every prediction and every rejected request. `send-traffic` replays a file and then writes its delayed `ground_truth`. The `monitor` DAG compares that window with the champion's reference dataset, pushes snapshots to the Evidently UI, and fails when a check fails. Only on exit 10 does `retrain_on_drift` trigger the `training` DAG, which again ends at a new challenger; `monitor_failed` keeps the run red.
 
 ## Run it locally
 
