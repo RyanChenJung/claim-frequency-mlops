@@ -31,7 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import mlflow
 import mlflow.sklearn
@@ -52,7 +52,7 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
-from claimfreq import automl, metrics
+from claimfreq import metrics
 from claimfreq.contracts import env, paths, schema
 from claimfreq.contracts.model import (
     MLFLOW_EXPERIMENT_NAME,
@@ -68,6 +68,9 @@ from claimfreq.contracts.model import (
     split_xy_w,
 )
 from claimfreq.contracts.params import GlmParams, LightgbmParams, Params, load_params
+
+if TYPE_CHECKING:
+    from claimfreq.automl import SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -143,8 +146,11 @@ class FlamlCandidate:
     """The FLAML candidate: a search on the tree preprocessing, refitted as a Pipeline."""
 
     params: Params
-    # The search itself; tests replace it to avoid a timed search.
-    search: Callable[..., automl.SearchResult] = automl.run_search
+    # The search itself; tests replace it to avoid a timed search. None means
+    # `automl.run_search`, imported only when the FLAML candidate is fitted, so that importing
+    # this module (as `register`, `promote`, and `evaluate-test` do, for `read_split`) does not
+    # load FLAML, which the api image does not install.
+    search: Callable[..., SearchResult] | None = None
     name: str = CANDIDATE_FLAML
 
     def fit(self, X: pd.DataFrame, y: np.ndarray, w: np.ndarray, run_id: str) -> Fitted:
@@ -154,9 +160,12 @@ class FlamlCandidate:
         compare trials. The best configuration is then refitted on the whole train split,
         behind the same preprocessing, with exposure weights.
         """
+        from claimfreq import automl
+
         training = self.params.training
         preprocess = build_tree_preprocess()
-        result = self.search(
+        search = self.search or automl.run_search
+        result = search(
             preprocess.fit_transform(X),
             y,
             w,

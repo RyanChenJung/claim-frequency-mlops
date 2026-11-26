@@ -157,8 +157,10 @@ class TrainingParams(_Section):
     flaml_holdout_ratio: float = Field(default=0.2, strict=True, gt=0, lt=1)
     # Candidates `train` fits; "constant" is required, since every candidate must beat it.
     candidates: list[CandidateName] = Field(default_factory=lambda: list(CANDIDATE_NAMES))
-    # Model seed (AutoML search, model fitting). Separate from the data seed, so retraining with
-    # another seed leaves the splits, and so dvc.lock, unchanged.
+    # Model seed: seeds FLAML's search and the fixed LightGBM
+    # candidate. The estimators FLAML fits keep FLAML's own fixed random_state, and FLAML's
+    # time-budgeted search does not repeat across runs anyway (ADR-0006). Separate from the data
+    # seed, so retraining with another seed leaves the splits, and so dvc.lock, unchanged.
     seed: int = _seed_field()
     glm: GlmParams = Field(default_factory=GlmParams)
     lightgbm: LightgbmParams = Field(default_factory=LightgbmParams)
