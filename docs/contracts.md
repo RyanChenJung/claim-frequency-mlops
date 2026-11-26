@@ -186,7 +186,7 @@ Each **drift scenario** (`DriftScenario`) is a corruption of the test split. All
 | Live deviance | as calibration | live Poisson deviance ÷ reference Poisson deviance > `live_deviance_max_ratio` |
 
 - **No data** means no row in either `prediction_log` or `rejected_request_log` for the window (and the `--batch-id` filter). `monitor` then logs a `no data in window` line and exits 0.
-- **Exit code.** A skipped check never fails the run. `monitor` exits 10 if any check that ran failed, else 0.
+- **Exit code.** A skipped check never fails the run. `monitor` exits 10 if any check that ran failed. Otherwise it exits 1 if it could not push the Evidently snapshot (it prints the error, without a traceback), and 0 if everything succeeded. A failed alert never changes the exit code, because the alert is only sent when a check failed. When data drift and prediction drift are skipped, no snapshot is pushed.
 - `claimfreq monitor --help` shows the same rules.
 
 Each scenario must fail exactly the checks its row names. Every other check that runs must pass, except one that the row says may also fail, which can go either way:
@@ -260,7 +260,7 @@ Every command exists with its final name and arguments. `fake-data` and `train` 
 | Code | Meaning |
 |---|---|
 | 0 | OK |
-| 1 | unexpected error: any unhandled exception. `main()` prints the traceback to stderr. Python's own default for a crash is also 1 |
+| 1 | unexpected error: any unhandled exception. `main()` prints the traceback to stderr. Python's own default for a crash is also 1; also `monitor` when every check that ran passed but the Evidently snapshot could not be pushed (no traceback) |
 | 2 | usage error (argparse) |
 | 3 | not implemented yet |
 | 10 | check failed (validation or a monitoring test). `main()` turns an uncaught `SchemaError` into 10 and prints its message to stderr, without a traceback |
@@ -268,7 +268,7 @@ Every command exists with its final name and arguments. `fake-data` and `train` 
 - **Validation failures.** A command owner may simply let `validate_frame` raise: `main()` reports every violation and exits 10.
 - **`send-traffic`** exits 0 when every batch got an HTTP response of 200 or 422, and prints the counts. It can wait for `/health` to return 200 before the first batch. It exits 1 on connection errors, or on 5xx (including 503) after retries.
 - **`batch_id`** identifies one `send-traffic` run and is shared by every HTTP request of that run. When `--batch-id` is omitted, the default is `<source>-<UTC timestamp %Y%m%dT%H%M%SZ>`, for example `portfolio_shift-20261201T153000Z`. `send-traffic` and `monitor` reject a `--batch-id` longer than `api.MAX_BATCH_ID_LENGTH` (64) with exit 2.
-- **`monitor`** exits 10 if any check that ran failed, and 0 otherwise; a skipped check never fails it, and a window without data logs a `no data in window` line and exits 0 ([What the monitor must catch](#what-the-monitor-must-catch)). The window is described under [DAGs](#dags).
+- **`monitor`** exits 10 if any check that ran failed, 1 if every check that ran passed but the Evidently snapshot could not be pushed (no traceback), and 0 otherwise; a skipped check never fails it, and a window without data logs a `no data in window` line and exits 0 ([What the monitor must catch](#what-the-monitor-must-catch)). The window is described under [DAGs](#dags).
 
 ## Runtime
 

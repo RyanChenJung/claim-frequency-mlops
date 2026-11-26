@@ -10,7 +10,8 @@ Exit codes (any nonzero code makes Airflow mark the task failed):
 
 - ``0`` OK.
 - ``1`` unexpected error: any unhandled exception. ``main`` prints the traceback to stderr;
-  Python's own default for a crash is also 1.
+  Python's own default for a crash is also 1; also ``monitor`` when every check that ran
+  passed but the Evidently snapshot could not be pushed (no traceback).
 - ``2`` usage error (argparse's default for bad arguments).
 - ``3`` not implemented yet.
 - ``10`` a check failed (data validation or a monitoring test), kept distinct from a crash.
@@ -52,8 +53,9 @@ MONITOR_SEMANTICS = (
     "with at least monitor.min_predictions predictions; otherwise they are reported as "
     "'skipped (too few predictions)'. Calibration and live deviance run only on the "
     "predictions that have ground truth; with none, they are reported as 'skipped (no ground "
-    "truth yet)'. A skipped check never fails the run: exit 10 if any check that ran failed, "
-    "else 0."
+    "truth yet)'. A skipped check never fails the run: exit 10 if any check that ran failed; "
+    "otherwise exit 1 if the Evidently push failed, else 0. No snapshot is pushed when the "
+    "drift checks are skipped."
 )
 
 
@@ -136,7 +138,10 @@ def _train(args: argparse.Namespace) -> int:
 
 
 def _monitor(args: argparse.Namespace) -> int:
-    """Run the five checks on one window of the logs; exit 10 if any check that ran failed."""
+    """Run the five checks on one window of the logs; exit 10 if any check that ran failed.
+
+    Otherwise exit 1 if the Evidently push failed, else 0.
+    """
     # Imported here so `--help` and the stubs stay fast and need no pandas or Evidently.
     from claimfreq.contracts import env
     from claimfreq.contracts.logs import create_all, make_engine
