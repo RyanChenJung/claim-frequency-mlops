@@ -192,7 +192,7 @@ The course asks every submission to list its assisting sources, with the product
 
 - **RyanChenJung (C. Platform)**: Claude Code 2.1.325 to 2.1.330 (Anthropic), with the model Claude Opus 5.5 (`claude-opus-5-5`). Used to draft code, tests, docs, and PR reviews, and to run verification checks. Ryan read and approved each change before it was committed or posted. Commits it helped write carry a `Co-Authored-By: Claude Opus 5.5` trailer.
 - **lx977 (A. Data)**: to be added.
-- **MarSmallK (B. Modeling)**: to be added.
+- **MarSmallK (B. Modeling)**: Claude Code (Anthropic; desktop app, CLI 2.1.300), with the model Claude Opus 5.5 (`claude-opus-5-5`). Used to write Role B's code, tests, and docs (`train`, `register`, `promote`, `evaluate-test`, the results table, the architecture diagram, the PR template), to answer reviews, and to run the real-data training and the checks. MarSmallK directed the work and decided what to open and merge. Commits it helped write carry a `Co-Authored-By: Claude Opus 5.5` trailer.
 - **cyq01 (D. Serving and monitoring)**: to be added.
 
 ## License
