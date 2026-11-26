@@ -12,6 +12,7 @@ import mlflow
 import numpy as np
 import pandas as pd
 import pytest
+from conftest import fast_params
 from mlflow.entities import RunStatus
 from mlflow.tracking import MlflowClient
 
@@ -41,7 +42,6 @@ from claimfreq.contracts.model import (
     is_better,
     split_xy_w,
 )
-from claimfreq.contracts.params import Params
 from claimfreq.contracts.schema import coerce_features, coerce_frame, schema_hash
 from claimfreq.fakes import make_policies
 from claimfreq.registry import (
@@ -65,7 +65,7 @@ LINEAGE = {TAG_SCHEMA_HASH: "s1", TAG_DATA_HASH: "d1", TAG_ALGORITHM: "poisson_g
 DEVIANCE = MetricName.POISSON_DEVIANCE.value
 VAL_DEVIANCE = f"{MetricPrefix.VAL}{DEVIANCE}"
 # A params change that keeps data and algorithm, so the next version is a PATCH.
-PATCH_PARAMS = Params.model_validate({"training": {"glm": {"alpha": 0.001}}})
+PATCH_PARAMS = fast_params(glm={"alpha": 0.001})
 
 
 def _client() -> MlflowClient:
@@ -336,7 +336,7 @@ def test_a_worse_challenger_does_not_beat_the_champion(workspace):
     register()
     promote(1)
     # A heavy penalty flattens the GLM towards the constant: worse validation deviance.
-    train(Params.model_validate({"training": {"glm": {"alpha": 100.0}}}))
+    train(fast_params(glm={"alpha": 100.0}))
     run = _client().get_run(register().run_id)
     assert run.data.tags[TAG_BEATS_CHAMPION] == "false"
 
@@ -383,7 +383,7 @@ def test_promote_keeps_a_challenger_that_points_elsewhere(workspace):
     promote(1)
     train(PATCH_PARAMS)
     register()  # version 2 is the challenger
-    train(Params.model_validate({"training": {"glm": {"alpha": 0.01}}}))
+    train(fast_params(glm={"alpha": 0.01}))
     register()  # version 3 is the challenger
     result = promote(2)
     assert (str(result.target.version), str(result.previous.version)) == ("2", "1")

@@ -10,6 +10,7 @@ import mlflow
 import numpy as np
 import pandas as pd
 import pytest
+from conftest import fast_params
 from mlflow.tracking import MlflowClient
 
 from claimfreq.cli import EXIT_CHECK_FAILED, EXIT_ERROR, EXIT_OK, main
@@ -27,7 +28,7 @@ from claimfreq.contracts.model import (
     MetricPrefix,
     file_md5,
 )
-from claimfreq.contracts.params import Params, load_params
+from claimfreq.contracts.params import Params
 from claimfreq.contracts.schema import coerce_features, schema_hash
 from claimfreq.fakes import make_policies
 from claimfreq.training import (
@@ -58,7 +59,7 @@ def test_train_logs_one_parent_with_a_child_per_candidate(workspace):
     children = _children(client, parent_id)
     algorithms = {run.data.tags[TAG_ALGORITHM] for run in children}
     assert algorithms == {ALGORITHM_CONSTANT, ALGORITHM_POISSON_GLM}
-    assert len(children) == len(build_candidates(Params()))
+    assert len(children) == len(build_candidates(fast_params()))
 
 
 def test_every_child_has_lineage_params_and_val_metrics(workspace):
@@ -68,7 +69,7 @@ def test_every_child_has_lineage_params_and_val_metrics(workspace):
         TAG_DATA_HASH: file_md5(workspace / paths.TRAIN),
         TAG_SCHEMA_HASH: schema_hash(),
     }
-    seed = load_params().training.seed
+    seed = fast_params().training.seed
     for run in _children(MlflowClient(), parent_id):
         tags = run.data.tags
         assert set(RUN_TAGS) <= set(tags)
@@ -106,7 +107,7 @@ def test_fit_routes_exposure_weights():
     X = coerce_features(policies)
     y = policies["ClaimNb"].to_numpy(float) / policies["Exposure"].to_numpy(float)
     w = policies["Exposure"].to_numpy(float)
-    constant = build_candidates(Params())[0]
+    constant = build_candidates(fast_params())[0]
     fitted = fit_candidate(constant, X, y, w)
     # The weighted mean of the frequency is total claims / total exposure.
     expected = policies["ClaimNb"].sum() / policies["Exposure"].sum()
@@ -146,7 +147,7 @@ def test_glm_stays_bounded_at_the_extremes_the_api_accepts():
     X = coerce_features(policies)
     y = policies["ClaimNb"].to_numpy(float) / policies["Exposure"].to_numpy(float)
     w = policies["Exposure"].to_numpy(float)
-    glm = fit_candidate(build_candidates(Params())[1], X, y, w)
+    glm = fit_candidate(build_candidates(fast_params())[1], X, y, w)
     # BonusMalus 350 and Density 50,000 are allowed by the API but far above the fake data.
     extreme = X.head(1).assign(BonusMalus=350, Density=50_000, DrivAge=18)
     prediction = float(glm.predict(coerce_features(extreme))[0])
