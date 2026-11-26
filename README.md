@@ -90,7 +90,7 @@ flowchart LR
 ```
 
 - **Data path.** `dvc repro` rebuilds the splits and drift files from OpenML; teammates can `dvc pull` the same versions from DagsHub with a personal token (graders use `dvc repro`, since DagsHub denies anonymous reads, [ADR-0004](docs/adr/0004-dvc-with-dagshub-remote.md)).
-- **Training and registry.** The `training` DAG runs `dvc_repro → train → register`. `register` only produces a `challenger`. Moving `champion` is a human `promote`, after which the API is restarted to serve it. `evaluate-test` is the only reader of `splits/test` besides `send-traffic`.
+- **Training and registry.** The `training` DAG runs `dvc_repro → train → register`. `register` only produces a `challenger`. Moving `champion` is a human `promote`, after which the API is restarted to serve it. Apart from `make-drift` and `send-traffic`, only `evaluate-test` reads `splits/test`.
 - **Serving and monitoring.** The API logs every prediction and every rejected request. `send-traffic` replays a file and then writes its delayed `ground_truth`. The `monitor` DAG compares that window with the champion's reference dataset, pushes snapshots to the Evidently UI, and fails when a check fails. Only on exit 10 does `retrain_on_drift` trigger the `training` DAG, which again ends at a new challenger; `monitor_failed` keeps the run red.
 
 ## Run it locally
