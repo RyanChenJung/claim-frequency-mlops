@@ -4,7 +4,7 @@
 as stage params, so changing a value reruns only the stages that depend on it. Each section is
 owned by one role:
 
-- ``split``, ``clean``: Role A (Data). Role A will add its own ``drift`` section later.
+- ``split``, ``clean``, ``drift``: Role A (Data).
 - ``training``: Role B (Modeling).
 - ``traffic``, ``monitor``: Role D (Serving and monitoring).
 
@@ -67,6 +67,40 @@ class CleanParams(_Section):
 
     claim_nb_cap: int = Field(default=DEFAULT_CLAIM_NB_CAP, strict=True, ge=1)
     exposure_cap: float = Field(default=DEFAULT_EXPOSURE_CAP, strict=True, gt=0)
+
+
+class PortfolioShiftParams(_Section):
+    """``portfolio_shift`` drift scenario: weighted sampling toward young drivers in dense areas.
+
+    Each test policy gets the weight ``exp(-age_weight * z(DrivAge) + density_weight *
+    z(log Density))``, where ``z`` standardizes a column over the test split, and a
+    ``sample_fraction`` of the policies is drawn without replacement with those weights.
+    """
+
+    # Share of the test split kept. Below 1, or the sample would be the whole split, unshifted.
+    sample_fraction: float = Field(default=0.4, strict=True, gt=0, lt=1)
+    # Larger values favour younger drivers more strongly.
+    age_weight: float = Field(default=1.5, strict=True, ge=0)
+    # Larger values favour denser areas more strongly (on the log scale: Density spans 1-27,000).
+    density_weight: float = Field(default=1.0, strict=True, ge=0)
+
+
+class ConceptDriftParams(_Section):
+    """``concept_drift`` drift scenario: same policies, more claims."""
+
+    # The claim rate is multiplied by about this factor, before clipping to clean.claim_nb_cap.
+    claim_multiplier: float = Field(default=1.5, strict=True, gt=1)
+
+
+class DriftParams(_Section):
+    """``make-drift`` knobs, Role A's own section.
+
+    ``make-drift`` checks the contract's minimum effect sizes at run time and exits 10 when a
+    knob is too weak (docs/contracts.md, Drift files).
+    """
+
+    portfolio_shift: PortfolioShiftParams = Field(default_factory=PortfolioShiftParams)
+    concept_drift: ConceptDriftParams = Field(default_factory=ConceptDriftParams)
 
 
 class GlmParams(_Section):
@@ -148,6 +182,7 @@ class Params(_Section):
     seed: int = _seed_field()
     split: SplitParams = Field(default_factory=SplitParams)
     clean: CleanParams = Field(default_factory=CleanParams)
+    drift: DriftParams = Field(default_factory=DriftParams)
     training: TrainingParams = Field(default_factory=TrainingParams)
     traffic: TrafficParams = Field(default_factory=TrafficParams)
     monitor: MonitorParams = Field(default_factory=MonitorParams)
