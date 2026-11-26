@@ -154,15 +154,12 @@ def _register(args: argparse.Namespace) -> int:
     """Register the best candidate of the latest train run as challenger; exit 10 if none."""
 
     def action() -> str:
-        from claimfreq.registry import register
+        from claimfreq.registry import fallback_message, register
 
         result = register()
         lines = []
         if result.skipped_parents:
-            lines.append(
-                f"register: skipped {result.skipped_parents} newer train run(s) that did not "
-                f"finish; falling back to candidate set {result.candidate_set}"
-            )
+            lines.append(fallback_message(result.skipped_parents, result.candidate_set))
         if result.already_registered:
             lines.append(
                 f"register: run {result.run_id} (candidate set {result.candidate_set}) is "
@@ -187,11 +184,17 @@ def _promote(args: argparse.Namespace) -> int:
 
         result = promote(args.version)
         target, previous = result.target, result.previous
+        semver = target.tags.get(TAG_SEMVER, "no semver")
+        if previous is not None and str(previous.version) == str(target.version):
+            return (
+                f"promote: version {target.version} ({semver}) is already the champion; nothing "
+                "changed. Restart the api container only if it does not serve this version yet."
+            )
         was = f"version {previous.version}" if previous is not None else "no champion"
         cleared = "; challenger alias cleared" if result.cleared_challenger else ""
         return (
             f"promote: champion is now version {target.version} "
-            f"({target.tags.get(TAG_SEMVER, 'no semver')}); was {was}{cleared}. Restart the api "
+            f"({semver}); was {was}{cleared}. Restart the api "
             "container to serve it."
         )
 

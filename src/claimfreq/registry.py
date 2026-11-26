@@ -9,7 +9,7 @@
    value is NaN or missing is never picked; on a tie the earlier child wins.
 3. If that child is already a registered version, registers nothing and only makes sure the
    ``challenger`` alias points at it (unless it is the champion), so a retry repairs an alias
-   call that failed. This check runs first, so a re-run is always a no-op.
+   call that failed. This check runs first, so a re-run never registers anything.
 4. Otherwise it checks that the train split under ``DATA_DIR`` is the file the run was trained
    on (md5 = the run's ``data_hash``), because steps 5 and 6 read the validation split.
 5. Logs the comparison with the ``champion`` as tags on the child run (keys below): the champion
@@ -19,8 +19,9 @@
    child run) as ``claim-frequency``, with every model-version tag, and sets alias ``challenger``.
 
 ``promote --version N`` (a human, ADR-0007) moves the ``champion`` alias to version N. If the
-``challenger`` alias pointed at N, it is removed: the challenger is the newest best model *not
-yet promoted*.
+``challenger`` alias pointed at N, it is removed, so ``challenger`` never names the current
+champion. A re-run of ``register`` re-points ``challenger`` at the latest train run's best, also
+after a rollback (``promote`` of an older version) or after someone deleted the alias.
 
 Semantic version of a new version (ADR-0007):
 
@@ -350,7 +351,6 @@ def register(params: Params | None = None) -> Registration:
             that is not the file the run was trained on.
     """
     params = params or load_params()
-    selection_metric = params.training.selection_metric.value
     mlflow.set_tracking_uri(env.get(env.MLFLOW_TRACKING_URI))
     client = MlflowClient()
     experiment = client.get_experiment_by_name(MLFLOW_EXPERIMENT_NAME)
@@ -360,8 +360,31 @@ def register(params: Params | None = None) -> Registration:
         )
 
     parent, skipped = latest_finished_parent(client, experiment.experiment_id)
+    try:
+        return _register_from(client, experiment.experiment_id, parent, skipped, params)
+    except RegistryCheckError as error:
+        if not skipped:
+            raise
+        # The CLI prints the fallback line from the Registration, which a refusal never returns.
+        fallback = fallback_message(skipped, parent.info.run_id)
+        raise RegistryCheckError(f"{fallback}\n{error}") from None
+
+
+def fallback_message(skipped: int, candidate_set: str) -> str:
+    """Return the line that says ``register`` skipped newer, unfinished train runs."""
+    return (
+        f"register: skipped {skipped} newer train run(s) that did not finish; falling back to "
+        f"candidate set {candidate_set}"
+    )
+
+
+def _register_from(
+    client: MlflowClient, experiment_id: str, parent: Run, skipped: int, params: Params
+) -> Registration:
+    """Steps 2-7 of ``register`` (module docstring) for the candidate set of ``parent``."""
+    selection_metric = params.training.selection_metric.value
     best = select_best(
-        finished_children(client, experiment.experiment_id, parent.info.run_id), selection_metric
+        finished_children(client, experiment_id, parent.info.run_id), selection_metric
     )
     run_tags = best.data.tags
     found = {
@@ -390,7 +413,7 @@ def register(params: Params | None = None) -> Registration:
         raise RegistryCheckError(
             f"register: {paths.data_path(paths.TRAIN)} has md5 {train_hash}, but the train run "
             f"{parent.info.run_id} used {run_tags[TAG_DATA_HASH]}; check out the matching data "
-            "before registering"
+            "before registering, or re-run `claimfreq train` on the current data"
         )
 
     champion = current_champion(client)

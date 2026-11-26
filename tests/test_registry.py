@@ -269,6 +269,33 @@ def test_a_retry_restores_a_challenger_alias_that_failed(workspace, monkeypatch)
     assert str(_alias(ALIAS_CHALLENGER).version) == retry.version == "1"
 
 
+def test_a_retry_moves_a_stale_challenger_to_the_new_version(workspace, monkeypatch):
+    # The usual Airflow retry: a later registration whose alias call fails leaves `challenger`
+    # on the previous version; the retry must move it to the new one.
+    train()
+    register()
+    promote(1)
+    train(PATCH_PARAMS)
+    register()  # version 2 is the challenger
+    train(fast_params(glm={"alpha": 0.01}))
+    real = MlflowClient.set_registered_model_alias
+
+    def fail_challenger(self, name, alias, version):
+        if alias == ALIAS_CHALLENGER and str(version) == "3":
+            raise RuntimeError("tracking server hiccup")
+        return real(self, name, alias, version)
+
+    monkeypatch.setattr(MlflowClient, "set_registered_model_alias", fail_challenger)
+    with pytest.raises(RuntimeError):
+        register()
+    assert str(_alias(ALIAS_CHALLENGER).version) == "2"  # stale
+    monkeypatch.setattr(MlflowClient, "set_registered_model_alias", real)
+    retry = register()
+    assert retry.already_registered and retry.version == "3"
+    assert str(_alias(ALIAS_CHALLENGER).version) == "3"
+    assert str(_alias(ALIAS_CHAMPION).version) == "1"
+
+
 def test_rerun_for_a_registered_run_is_a_noop_even_on_other_data(workspace):
     # The idempotence check runs before the data check (docs/contracts.md, Exit codes).
     train()
@@ -282,6 +309,27 @@ def test_register_on_other_data_than_the_train_run_exits_10(workspace, capsys):
     make_policies(8_000, seed=12, id_start=1).to_parquet(workspace / paths.TRAIN, index=False)
     assert main(["register"]) == EXIT_CHECK_FAILED
     assert "check out the matching data" in capsys.readouterr().err
+
+
+def test_a_data_refusal_after_a_fallback_still_names_the_fallback(workspace, capsys):
+    parent_id = train()
+    client = _client()
+    experiment = client.get_experiment_by_name(MLFLOW_EXPERIMENT_NAME)
+    failed = client.create_run(experiment.experiment_id, tags={TAG_CANDIDATE_SET: "x"})
+    client.set_terminated(failed.info.run_id, RunStatus.to_string(RunStatus.FAILED))
+    make_policies(8_000, seed=12, id_start=1).to_parquet(workspace / paths.TRAIN, index=False)
+    assert main(["register"]) == EXIT_CHECK_FAILED
+    err = capsys.readouterr().err
+    assert "skipped 1 newer train run(s) that did not finish" in err
+    assert f"falling back to candidate set {parent_id}" in err
+    assert "or re-run `claimfreq train` on the current data" in err
+
+
+def test_a_refusal_without_a_fallback_has_no_fallback_line(workspace, capsys):
+    train()
+    make_policies(8_000, seed=12, id_start=1).to_parquet(workspace / paths.TRAIN, index=False)
+    assert main(["register"]) == EXIT_CHECK_FAILED
+    assert "falling back" not in capsys.readouterr().err
 
 
 def test_register_without_a_train_run_exits_10(workspace, capsys):
@@ -350,6 +398,28 @@ def test_retrain_on_new_data_is_a_minor(workspace):
     assert register().semver == "1.1.0"
 
 
+def test_the_champion_is_rescored_on_the_new_validation_split(workspace):
+    # Not its stored val_* metrics: those were measured on the old validation split.
+    train()
+    register()
+    promote(1)
+    stored = _client().get_run(_version("1").run_id).data.metrics[VAL_DEVIANCE]
+    make_policies(8_000, seed=11, id_start=1).to_parquet(workspace / paths.TRAIN, index=False)
+    make_policies(3_000, seed=13, id_start=500_000).to_parquet(
+        workspace / paths.VALIDATION, index=False
+    )
+    train()
+    tags = _client().get_run(register().run_id).data.tags
+    validation = _validation(workspace)
+    _, y, w = split_xy_w(validation)
+    rescored = metrics.poisson_deviance(
+        y, _predict(f"models:/{REGISTERED_MODEL_NAME}/1", validation), w
+    )
+    recorded = float(tags[f"{CHAMPION_TAG_PREFIX}{VAL_DEVIANCE}"])
+    assert recorded == pytest.approx(rescored)
+    assert recorded != pytest.approx(stored)
+
+
 def test_a_schema_change_is_major_and_incomparable(workspace):
     train()
     register()
@@ -397,6 +467,18 @@ def test_a_retry_never_puts_challenger_on_the_champion(workspace):
     promote(1)
     assert register().already_registered
     assert _version("1").aliases == [ALIAS_CHAMPION]
+
+
+def test_promoting_the_champion_again_changes_nothing(workspace, capsys):
+    train()
+    register()
+    assert main(["promote", "--version", "1"]) == EXIT_OK
+    capsys.readouterr()
+    assert main(["promote", "--version", "1"]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "version 1 (1.0.0) is already the champion; nothing changed" in out
+    assert "champion is now" not in out
+    assert str(_alias(ALIAS_CHAMPION).version) == "1"
 
 
 def test_promote_a_missing_version_exits_10(workspace, capsys):
