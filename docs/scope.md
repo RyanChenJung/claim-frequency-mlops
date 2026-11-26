@@ -94,9 +94,9 @@ There is one `docker compose` stack:
 |---|---|---|
 | `schema_break` | Rename a column or send a wrong type | API returns 422; monitoring shows a spike in the rejection rate |
 | `out_of_bounds` | Impossible values (e.g. `DrivAge = 250`, negative `BonusMalus`) | API validation rejects the requests |
-| `column_swap` | Swap `VehAge` and `VehPower` on the policies where each value is valid in the other column (`VehAge` 4–15). Values stay plausible, so validation passes | Only Evidently's distribution checks catch it: a silent failure |
+| `column_swap` | Swap `VehAge` and `VehPower` on the policies where each value is valid in the other column (`VehAge` 4–15). Values stay plausible, so validation passes | Only Evidently's distribution checks are sure to catch it: a silent failure |
 | `portfolio_shift` | Resample toward young, urban drivers (lower `DrivAge`, higher `Density`) | Data drift, and the mean predicted frequency rises |
-| `concept_drift` | Same feature distribution, higher true claim rate | Data drift tests pass; the calibration ratio fails. Shows why data drift alone is not enough |
+| `concept_drift` | Same feature distribution, higher true claim rate | Data drift tests pass; the calibration ratio and live deviance fail. Shows why data drift alone is not enough |
 
 The story is a two-layer defense. API validation blocks impossible inputs; Evidently catches inputs that look plausible but whose distribution has shifted.
 

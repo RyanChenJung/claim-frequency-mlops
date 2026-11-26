@@ -1,14 +1,17 @@
 # Keep secrets, local state, and bulky folders out of every Docker build context, so nothing
 # here can be baked into an image layer (and builds stay fast).
 
-# Secrets
+# Secrets. `**/` also matches the repo root, so this covers the root file and any nested copy.
 .env
 *.env.local
-.dvc/config.local
+**/.dvc/config.local
 
-# Local environments, caches, and data
+# Local environments, caches, and data. .dvc/tmp/ holds DVC's locks and, during a
+# `dvc exp run --temp` or a queued experiment, a workspace copy with its own
+# .dvc/config.local and .git/config, so the whole folder stays out.
 .venv/
 .dvc/cache/
+.dvc/tmp/
 data/
 *.db
 mlruns/

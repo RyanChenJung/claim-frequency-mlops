@@ -32,3 +32,11 @@ logs/
 data/fake/
 monitoring.db
 mlflow.db
+
+# Real data that ingest, clean, split, and make-drift write under the default DATA_DIR. These
+# are DVC stage outputs (ADR-0004), not git files. Track a new file here with a dvc.yaml stage:
+# `dvc add <file>` fails, because its .dvc file would be git-ignored too.
+data/raw/
+data/processed/
+data/splits/
+data/drift/

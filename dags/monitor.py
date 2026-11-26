@@ -12,7 +12,8 @@ Tasks:
 - ``monitor_failed`` fails whenever ``monitor`` failed, so the DAG run itself turns red (the
   alert) even after a successful retraining trigger. When ``monitor`` passes, it is skipped
   and the run succeeds.
-- Hourly, paused at creation; pause it for the demo and trigger it by hand instead.
+- Hourly, paused at creation. Unpause it before triggering it from the CLI: Airflow leaves every
+  run of a paused DAG queued, manual ones included.
 - Optional run params: ``batch_id`` (one send-traffic run), ``since`` / ``until`` (ISO
   8601; the window rules live in monitor_window.py), and ``retrain_on_drift`` (default on).
 - ``retries=0`` everywhere: a failed check would only repeat the alert.

@@ -146,6 +146,21 @@ def test_ground_truth_insert_and_foreign_key(engine, logged_rows):
         )
 
 
+def test_engine_replaces_a_pooled_connection_that_died(tmp_path):
+    """A pooled connection that died, as when the database restarts, is replaced, not reused.
+
+    The API keeps one engine for its whole life, so otherwise its first query after a Postgres
+    restart fails, and that request gets HTTP 500.
+    """
+    engine = make_engine(f"sqlite:///{tmp_path / 'monitoring.db'}")
+    create_all(engine)
+    with engine.connect() as connection:
+        pooled = connection.connection.dbapi_connection
+    pooled.close()  # dies while it waits in the pool
+    with engine.connect() as connection:
+        assert connection.execute(select(prediction_log)).all() == []
+
+
 @pytest.mark.parametrize(("claim_nb", "exposure"), [(-1, 1.0), (0, 0.0)])
 def test_ground_truth_rejects_impossible_outcomes(engine, logged_rows, claim_nb, exposure):
     with pytest.raises(IntegrityError), engine.begin() as connection:

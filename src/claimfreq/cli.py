@@ -2,9 +2,9 @@
 
 The Airflow DAGs (Role C) and DVC stages (Role A) call these commands inside the ``trainer``
 image, so the command line is the only interface they depend on (ADR-0003). Each command
-already exists with its final arguments; only ``fake-data`` works today. The others are stubs
-that exit with ``EXIT_NOT_IMPLEMENTED`` until their owner replaces the stub with a real
-implementation, without changing the command line.
+already exists with its final arguments. Commands not implemented yet are stubs that exit with
+``EXIT_NOT_IMPLEMENTED`` until their owner replaces the stub with a real implementation, without
+changing the command line; ``tests/test_cli.py`` lists the remaining stubs in ``STUBS``.
 
 Exit codes (any nonzero code makes Airflow mark the task failed):
 
@@ -70,6 +70,21 @@ def _not_implemented(owner: str) -> Handler:
     return handler
 
 
+def _ingest(args: argparse.Namespace) -> int:
+    """Download OpenML 41214, check it, and write the raw-stage parquet file."""
+    # Imported here so `--help` and the stubs stay fast and need no pandas or scikit-learn.
+    from claimfreq.ingest import CountCheckError, ingest
+
+    try:
+        out, n_rows = ingest()
+    except CountCheckError as error:
+        # Wrong totals are a failed check (exit 10), like a SchemaError, not a crash.
+        print(error, file=sys.stderr)
+        return EXIT_CHECK_FAILED
+    print(f"ingest: wrote {n_rows} policies to {out}")
+    return EXIT_OK
+
+
 def _fake_data(args: argparse.Namespace) -> int:
     """Write schema-valid synthetic clean-stage policies to a parquet file."""
     # Imported here so `--help` and the stubs stay fast and need no pandas or scikit-learn.
@@ -89,6 +104,34 @@ def _fake_data(args: argparse.Namespace) -> int:
     policies = make_policies(args.rows, seed=args.seed, id_start=args.id_start)
     policies.to_parquet(out, index=False)
     print(f"wrote {args.rows} fake policies to {out}")
+    return EXIT_OK
+
+
+def _make_drift(args: argparse.Namespace) -> int:
+    """Write all five drift scenario files from the test split, and print their effects."""
+    # Imported here so `--help` and the stubs stay fast and need no pandas.
+    from claimfreq.make_drift import EffectSizeError, make_drift
+
+    try:
+        written, effects = make_drift()
+    except EffectSizeError as error:
+        # A scenario too weak to trip its monitoring check is a failed check (exit 10).
+        print(error, file=sys.stderr)
+        return EXIT_CHECK_FAILED
+    for out, n_rows in written.items():
+        print(f"make-drift: wrote {n_rows} policies to {out}")
+    measured = ", ".join(f"{name}={value:.3f}" for name, value in effects.items())
+    print(f"make-drift: effects {measured}")
+    return EXIT_OK
+
+
+def _train(args: argparse.Namespace) -> int:
+    """Train every candidate and log one parent MLflow run with a child run per candidate."""
+    # Imported here so `--help` and the stubs stay fast and need no mlflow.
+    from claimfreq.training import train
+
+    parent_run_id = train()
+    print(f"train: logged candidate set {parent_run_id}")
     return EXIT_OK
 
 
@@ -147,6 +190,46 @@ def _utc_datetime(value: str) -> datetime:
     return moment.astimezone(UTC)
 
 
+def _clean(args: argparse.Namespace) -> int:
+    """Cap ClaimNb and Exposure in the raw file and write the clean-stage file."""
+    # Imported here so `--help` and the stubs stay fast and need no pandas.
+    from claimfreq.clean import clean
+
+    out, n_rows, n_clipped = clean()
+    clipped = ", ".join(f"{column} on {count} rows" for column, count in n_clipped.items())
+    print(f"clean: wrote {n_rows} policies to {out} (clipped {clipped})")
+    return EXIT_OK
+
+
+def _split(args: argparse.Namespace) -> int:
+    """Split the clean-stage file into the train, validation, and test files."""
+    # Imported here so `--help` and the stubs stay fast and need no pandas or scikit-learn.
+    from claimfreq.split import split
+
+    for out, n_rows in split().items():
+        print(f"split: wrote {n_rows} policies to {out}")
+    return EXIT_OK
+
+
+def _send_traffic(args: argparse.Namespace) -> int:
+    """Replay a test or drift file through the API, then write ground truth for scored rows."""
+    # Imported here so `--help` and the stubs stay fast and need no pandas or httpx.
+    from claimfreq.send_traffic import TrafficError, send_traffic
+
+    try:
+        counts = send_traffic(args.source, batch_id=args.batch_id)
+    except TrafficError as error:
+        # A failed run, not a bug: the message says what went wrong, without a traceback.
+        print(f"send-traffic: error: {error}", file=sys.stderr)
+        return EXIT_ERROR
+    print(
+        f"send-traffic: {counts.batches} batches ({counts.scored_batches} scored with HTTP 200, "
+        f"{counts.rejected_batches} rejected with HTTP 422); {counts.scored_policies} policies "
+        f"scored, {counts.rejected_policies} rejected; {counts.ground_truth_rows} ground_truth rows"
+    )
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with every subcommand of the CLI contract."""
     parser = argparse.ArgumentParser(
@@ -167,22 +250,22 @@ def build_parser() -> argparse.ArgumentParser:
     add(
         "ingest",
         "Download OpenML dataset 41214 and write raw/freMTPL2freq.parquet (raw stage).",
-        _not_implemented(ROLE_DATA),
+        _ingest,
     )
     add(
         "clean",
         "Read raw/, cap ClaimNb and Exposure, and write processed/policies.parquet.",
-        _not_implemented(ROLE_DATA),
+        _clean,
     )
     add(
         "split",
         "Read processed/ and write splits/train, splits/validation, and splits/test parquet.",
-        _not_implemented(ROLE_DATA),
+        _split,
     )
     add(
         "make-drift",
         "Read splits/test.parquet and write all five drift/<scenario>.parquet files.",
-        _not_implemented(ROLE_DATA),
+        _make_drift,
     )
 
     # Role B (Modeling): Airflow tasks, plus promote (run by a human).
@@ -190,7 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
         "train",
         "Train candidates on splits/train, evaluate on splits/validation, and log each as a "
         "child run of one parent MLflow run per invocation.",
-        _not_implemented(ROLE_MODELING),
+        _train,
     )
     add(
         "register",
@@ -219,7 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
         "POST a data source to the API in batches of traffic.batch_size, then write "
         "ground_truth for the scored rows. Exit 0 when every batch got HTTP 200 or 422 (the "
         "counts are printed); exit 1 on connection errors or 5xx after retries.",
-        _not_implemented(ROLE_DATA),
+        _send_traffic,
     )
     send_traffic.add_argument(
         "--source",

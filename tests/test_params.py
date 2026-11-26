@@ -84,3 +84,22 @@ def test_seeds_are_strict_and_bounded(seed):
 
 def test_seed_range_boundaries_are_accepted():
     assert Params.model_validate({"seed": 0, "training": {"seed": SEED_MAX}}).seed == 0
+
+
+@pytest.mark.parametrize(
+    "glm",
+    [
+        {"solver": "saga"},  # not a PoissonRegressor solver
+        {"alpha": -1.0},
+        {"max_iter": 0},
+        {"vehage_bins": 1},
+        {"drivage_edges": []},
+        {"drivage_edges": [25, 21]},  # must increase
+        {"drivage_edges": [21, 21]},  # strictly
+        {"drivage_edges": ["21"]},  # strict integers
+        {"lr": 0.1},  # unknown key
+    ],
+)
+def test_invalid_glm_params_are_rejected(glm):
+    with pytest.raises(ValidationError):
+        Params.model_validate({"training": {"glm": glm}})

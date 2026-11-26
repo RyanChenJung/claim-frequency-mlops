@@ -22,7 +22,7 @@ We address them as follows:
 
 ## Consequences
 
-- The Airflow containers mount `/var/run/docker.sock`, which grants host-level Docker access. This is acceptable for local development. In production we would use `KubernetesPodOperator` instead, which we list as future work.
+- The `airflow-scheduler` container mounts `/var/run/docker.sock`, which grants host-level Docker access. It is the only one, because with `LocalExecutor` the tasks run there. This is acceptable for local development. In production we would use `KubernetesPodOperator` instead, which we list as future work.
 - DockerOperator mounts refer to host paths or named volumes, and the launched container must join the compose network to reach MLflow and Postgres.
 - Containers isolate dependencies, not memory. Docker Desktop still needs about 8 GB, and only the demo machine has to run the full stack.
 - The DAG author and the ML authors agree only on CLI commands and file paths (the CLI contract), so they can work in parallel.
