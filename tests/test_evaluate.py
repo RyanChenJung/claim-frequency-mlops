@@ -16,6 +16,7 @@ from claimfreq.contracts import paths
 from claimfreq.contracts.model import (
     ALIAS_CHAMPION,
     REGISTERED_MODEL_NAME,
+    TAG_DATA_HASH,
     TAG_SCHEMA_HASH,
     MetricName,
     MetricPrefix,
@@ -24,6 +25,7 @@ from claimfreq.contracts.model import (
 )
 from claimfreq.contracts.schema import coerce_features, coerce_frame
 from claimfreq.evaluation import TAG_TEST_DATA_HASH, evaluate_test
+from claimfreq.fakes import make_policies
 from claimfreq.registry import RegistryCheckError
 
 VAL_KEYS = {f"{MetricPrefix.VAL}{name}" for name in MetricName}
@@ -114,6 +116,18 @@ def test_refuses_a_champion_of_another_schema(workspace, champion):
     client.set_model_version_tag(REGISTERED_MODEL_NAME, version.version, TAG_SCHEMA_HASH, "old")
     with pytest.raises(RegistryCheckError, match="another feature schema"):
         evaluate_test()
+    assert not TEST_KEYS & set(client.get_run(version.run_id).data.metrics)
+
+
+def test_refuses_splits_of_another_data_version(workspace, champion, capsys):
+    client, version = champion
+    # Another data version: a different train split on disk than the champion's data_hash.
+    make_policies(8_000, seed=12, id_start=1).to_parquet(workspace / paths.TRAIN, index=False)
+    capsys.readouterr()
+    assert main(["evaluate-test"]) == EXIT_CHECK_FAILED
+    err = capsys.readouterr().err
+    assert version.tags[TAG_DATA_HASH] in err
+    assert file_md5(workspace / paths.TRAIN) in err
     assert not TEST_KEYS & set(client.get_run(version.run_id).data.metrics)
 
 

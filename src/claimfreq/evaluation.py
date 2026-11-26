@@ -10,6 +10,9 @@ test split, which no other command reads, and logs ``test_*`` metrics on the cha
   meanwhile.
 - No champion, or a champion trained on another feature schema, is a failed check (exit 10):
   its predictions on the current test split would mean nothing.
+- So is a train split under ``DATA_DIR`` whose md5 is not the champion's ``data_hash``: the
+  splits on disk then belong to another data version, whose test split may hold the
+  champion's own training rows (the same guard as ``register``'s).
 - The test split's md5 is logged as tag ``test_data_hash`` on the same run, so the ``test_*``
   metrics say which file they were measured on. Re-running ``evaluate-test`` appends a new step
   to each metric; MLflow reports the latest.
@@ -28,6 +31,7 @@ from claimfreq import metrics
 from claimfreq.contracts import env, paths, schema
 from claimfreq.contracts.model import (
     REGISTERED_MODEL_NAME,
+    TAG_DATA_HASH,
     TAG_SCHEMA_HASH,
     TAG_SEMVER,
     MetricPrefix,
@@ -58,8 +62,8 @@ def evaluate_test(params: Params | None = None) -> Evaluation:
     """Score the champion on ``splits/test.parquet`` and log ``test_*`` metrics on its run.
 
     Raises:
-        RegistryCheckError: if there is no champion, or its ``schema_hash`` is not the current
-            feature schema's.
+        RegistryCheckError: if there is no champion, its ``schema_hash`` is not the current
+            feature schema's, or the train split's md5 is not its ``data_hash``.
         SchemaError: if the test split breaks the clean-stage schema.
         FileNotFoundError: if there is no test split under ``DATA_DIR``.
     """
@@ -75,6 +79,14 @@ def evaluate_test(params: Params | None = None) -> Evaluation:
         raise RegistryCheckError(
             f"evaluate-test: champion version {champion.version} was trained on another feature "
             "schema than the current one; register and promote a model of this schema first"
+        )
+
+    train_md5 = file_md5(paths.data_path(paths.TRAIN))
+    if champion.tags.get(TAG_DATA_HASH) != train_md5:
+        raise RegistryCheckError(
+            f"evaluate-test: {paths.TRAIN} under DATA_DIR has md5 {train_md5}, but champion "
+            f"version {champion.version} was trained on {champion.tags.get(TAG_DATA_HASH)}; "
+            "check out the champion's data version (dvc.lock) before evaluating"
         )
 
     test_path = paths.data_path(paths.TEST)
