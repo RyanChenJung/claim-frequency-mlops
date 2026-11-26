@@ -399,7 +399,7 @@ api = [
     { name = "mlflow-skinny", specifier = "==3.18.0" },
     { name = "skops", specifier = ">=0.16.0" },
     { name = "uvicorn", specifier = ">=0.54.0" },
-    { name = "xgboost", specifier = ">=3.4.1" },
+    { name = "xgboost", specifier = ">=2.1.4" },
 ]
 dev = [
     { name = "httpx", specifier = ">=0.28.1" },

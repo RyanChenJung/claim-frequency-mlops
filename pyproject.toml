@@ -52,7 +52,7 @@ api = [
     "mlflow-skinny==3.18.0",
     "skops>=0.16.0",
     "uvicorn>=0.54.0",
-    "xgboost>=3.4.1",
+    "xgboost>=2.1.4",
 ]
 
 [build-system]
