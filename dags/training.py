@@ -25,7 +25,13 @@ with DAG(
     doc_md=__doc__,
 ):
     dvc_repro = trainer_task("dvc_repro", "dvc repro")
-    train = trainer_task("train", "claimfreq train", environment=MLFLOW)
+    # MLflow prints two URL lines for every run it ends, and each FLAML trial is a run, so
+    # without this the train log is mostly links.
+    train = trainer_task(
+        "train",
+        "claimfreq train",
+        environment={**MLFLOW, "MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT": "true"},
+    )
     register = trainer_task("register", "claimfreq register", environment=MLFLOW)
 
     dvc_repro >> train >> register

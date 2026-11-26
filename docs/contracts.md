@@ -73,10 +73,12 @@ One row is one **policy**. A policy frame has 12 columns, in this canonical orde
 - Registered model `claim-frequency`, in MLflow experiment `claim-frequency`. Aliases: `champion` (served) and `challenger` (newest best model, not yet promoted).
 - **Training convention:** the target is **claim frequency** `y = ClaimNb / Exposure`, with `sample_weight = Exposure`, on clean frames. `split_xy_w(df)` returns `(X, y, w)`.
 - **Input:** a DataFrame with exactly `FEATURE_COLUMNS`, in canonical order and dtypes, without `IDpol` or targets, built with `schema.coerce_features`. **Output:** a 1-D float array, one value > 0 per row, in claims per policy-year. `FrequencyModel` is the protocol.
+- **Signature.** Every logged model carries an MLflow signature inferred from the validation features, so `mlflow.pyfunc` enforces the input schema: the `FEATURE_COLUMNS` names, with `int64` numeric and string categorical columns. A frame built with `coerce_features` always passes it.
 - `ConstantFrequencyModel` is the **baseline model**: it predicts `sum(ClaimNb) / sum(Exposure)` for every policy. Every candidate must beat it.
-- **Artifact format** (what `register` logs and the API loads):
+- **Artifact format** (what `train` logs, `register` registers, and the API loads):
   - The champion is a scikit-learn `Pipeline` with all preprocessing (such as categorical encoding) inside it.
-  - It is logged with `mlflow.sklearn` using skops serialization, and its `skops_trusted_types` are listed at log time.
+  - `train` logs every candidate's fitted Pipeline in its own child run at `MODEL_ARTIFACT_PATH` (`model`), with `mlflow.sklearn` using skops serialization; its `skops_trusted_types` are listed at log time. `train` and `register` run in separate containers, so `register` registers `runs:/<best child run id>/model` rather than refitting or logging the model again.
+  - The model's `requirements.txt` lists only its runtime libraries (scikit-learn, skops, numpy, pandas, pyarrow, plus the `mlflow` pin MLflow adds; lightgbm and xgboost once #16 adds them), not the whole project.
   - It is loaded with `mlflow.pyfunc.load_model("models:/claim-frequency@champion")`.
   - Its runtime libraries are a subset of {scikit-learn, lightgbm, xgboost}. That is why the `api` dependency group carries all three ([Images](#images)).
   - The pyfunc model receives a features-only frame built with `coerce_features`.
@@ -86,8 +88,8 @@ One row is one **policy**. A policy frame has 12 columns, in this canonical orde
 - **Model version tags:** `semver`, `schema_hash`, `data_hash`, `git_commit`, `algorithm` (e.g. `constant`, `poisson_glm`, `lightgbm`, `flaml:lgbm`), `selection_metric`, `selection_metric_value`.
 - **Metric keys** are `<prefix><name>`. Prefixes: `val_` (validation; the only one used for selection), `test_` (final champion evaluation), `live_` (monitoring). Names: `poisson_deviance`, `gini`, `calibration_ratio`.
 - **Selection direction.** `METRIC_GOALS` says which way each metric is better: `poisson_deviance` → minimize, `gini` → maximize, `calibration_ratio` → closest to 1.0. `is_better(metric, candidate, incumbent)` returns True only when the candidate is strictly better; a tie or a NaN is never better. It returns a Python `bool`, also for numpy inputs. Role B's `register` uses it.
-- **Candidate scope** (for Roles B and C). `train` creates one parent MLflow run per invocation, tagged `candidate_set=<parent run id>`, and one child run per candidate. `register` considers only the children of the most recent `train` parent run (by start time). Everything else about `register` is Role B's.
-- **Reference dataset:** `register` logs it on the model's run at `reference/reference.parquet`, with `REFERENCE_COLUMNS` (`FEATURE_COLUMNS` + `ClaimNb` + `Exposure` + `predicted_frequency`) built from the validation split. The monitor loads it from the champion.
+- **Candidate scope** (for Roles B and C). `train` creates one parent MLflow run per invocation and one child run per candidate. The parent and every child are tagged `candidate_set=<parent run id>` (`TAG_CANDIDATE_SET`), so a search on that tag alone also returns children; a parent has no `mlflow.parentRunId` tag. `register` considers only the children of the most recent `train` parent run (by start time) whose status is `FINISHED`: if a candidate crashes, its parent ends `FAILED` and that candidate set is skipped. Everything else about `register` is Role B's.
+- **Reference dataset:** `register` logs it on the model's run (the `train` child run of the registered version) at `reference/reference.parquet`, with `REFERENCE_COLUMNS` (`FEATURE_COLUMNS` + `ClaimNb` + `Exposure` + `predicted_frequency`) built from the validation split. The monitor loads it from the champion.
 
 ### Shared metrics — [`metrics.py`](../src/claimfreq/metrics.py)
 
@@ -164,10 +166,10 @@ Each **drift scenario** (`DriftScenario`) is a corruption of the test split. All
 | `concept_drift` | Rating factors unchanged; `ClaimNb` increased so that the true claim rate is higher, still clipped to `claim_nb_cap`. The exact factor is Role A's choice, above the minimum effect size below | Yes |
 
 - **The `column_swap` rule.** Swap `VehAge` and `VehPower` only on the rows where both values are valid in the other column: `VehAge` must be within `VehPower`'s bounds (4–15), and `VehPower` is always within `VehAge`'s bounds (0–100). All other rows stay unchanged, and the file keeps every test row. A test in `tests/test_paths.py` applies this rule to fake policies and checks that the result passes the clean schema.
-- **Minimum effect sizes**, so that each scenario trips its check ([below](#what-the-monitor-must-catch)). Role A may go further.
-  - `concept_drift` raises the observed claim rate of the file by at least 25% relative to the test split.
+- **Minimum effect sizes**, so that each scenario trips its checks ([below](#what-the-monitor-must-catch)). Role A may go further, with one limit: a stronger `portfolio_shift` also raises the sample's claim rate, and with it the live deviance ratio, which `portfolio_shift` must still pass because its row does not name it.
+  - `concept_drift` raises the observed claim rate of the file by at least 40% relative to the test split.
   - `portfolio_shift` lowers mean `DrivAge` by at least 5 years and raises median `Density` by at least 50%.
-- **Integration ownership.** Role D owns the end-to-end check that each scenario fails exactly the check named in the [scenario table](#what-the-monitor-must-catch), at M2 integration, on Role A's real `make-drift` outputs.
+- **Integration ownership.** Role D owns the end-to-end check that each scenario fails exactly the checks named in the [scenario table](#what-the-monitor-must-catch), at M2 integration, on Role A's real `make-drift` outputs.
 - `schema_break` and `out_of_bounds` are never validated; the API rejects them with 422.
 - **What `send-traffic` sends.** It posts every column except `IDpol`, `ClaimNb`, and `Exposure` as is, with no coercion, so the broken files reach the API broken. It uses `IDpol` as `policy_id`, and keeps `ClaimNb` and `Exposure` for `ground_truth`.
 
@@ -187,23 +189,23 @@ Each **drift scenario** (`DriftScenario`) is a corruption of the test split. All
 - **Exit code.** A skipped check never fails the run. `monitor` exits 10 if any check that ran failed, else 0.
 - `claimfreq monitor --help` shows the same rules.
 
-Each scenario must fail a specific check:
+Each scenario must fail exactly the checks its row names. Every other check that runs must pass, except one that the row says may also fail, which can go either way:
 
-| Scenario | Check that must fail |
+| Scenario | Checks that must fail |
 |---|---|
 | clean test set | none (no false alarm) |
 | `schema_break`, `out_of_bounds` | rejection rate > `rejection_rate_max` |
-| `column_swap` | data drift share ≥ `drift_share_max` (2 of 9 rating factors drift) and/or prediction drift |
+| `column_swap` | data drift share ≥ `drift_share_max` (2 of 9 rating factors drift) and/or prediction drift; the live calibration ratio may also fail |
 | `portfolio_shift` | data drift share and prediction drift |
-| `concept_drift` | live calibration ratio outside [`calibration_min`, `calibration_max`]; data drift passes |
+| `concept_drift` | live calibration ratio outside [`calibration_min`, `calibration_max`] and live deviance ratio > `live_deviance_max_ratio`; data drift and prediction drift pass |
 
 ### Params — [`params.py`](../src/claimfreq/contracts/params.py)
 
 [`params.yaml`](../params.yaml) holds every tunable value and is tracked by DVC as stage params. `load_params()` validates it.
 
-- **Ownership.** Each section belongs to one role: `split` and `clean` to A, `training` to B, `traffic` and `monitor` to D. A role may add or change keys inside its own section in its own PR. That PR updates `Params` (`params.py`), `params.yaml`, and the table below together.
+- **Ownership.** Each section belongs to one role: `split`, `clean`, and `drift` to A, `training` to B, `traffic` and `monitor` to D. A role may add or change keys inside its own section in its own PR. That PR updates `Params` (`params.py`), `params.yaml`, and the table below together.
 - **Contract keys.** Keys read by more than one role, and the top-level `seed`, are contract changes ([Changing a contract](#changing-a-contract)).
-- Role A will add its own `drift:` section later, under the same rule.
+- Role A's `drift:` section holds the `make-drift` knobs. `make-drift` checks the [minimum effect sizes](#drift-files) at run time and exits 10 when a knob is too weak.
 - `params.yaml` sets every key explicitly. A test checks that every field of `Params` appears in the file; it does not pin the values.
 - Validation is strict: unknown keys are rejected, and integer, float, and boolean fields do not convert types (`true` is not 1, `1` is not `true`, `4.0` is not 4, `"0.2"` is not 0.2). A float field still accepts a YAML integer such as `1`.
 - Seeds are integers from 0 to 2^32 − 1. `fake-data --seed` accepts the same range.
@@ -211,8 +213,8 @@ Each scenario must fail a specific check:
 | Section | Owner | Keys (shipped values) |
 |---|---|---|
 | `seed` (top level) | contract | `seed: 42`, the data seed: used only by `split` and `make-drift` |
-| `split`, `clean` | A | `test_fraction: 0.2`, `validation_fraction: 0.1` (of the full dataset); `claim_nb_cap: 4`, `exposure_cap: 1.0` |
-| `training` | B | `selection_metric: poisson_deviance` (one of the metric names), `flaml_time_budget_s: 300`, `seed: 42` (the model seed) |
+| `split`, `clean`, `drift` | A | `test_fraction: 0.2`, `validation_fraction: 0.1` (of the full dataset); `claim_nb_cap: 4`, `exposure_cap: 1.0`; `drift:` `portfolio_shift:` `sample_fraction: 0.4` (share of the test split kept, sampled without replacement), `age_weight: 1.5` and `density_weight: 1.0` (weights on minus the standardized `DrivAge` and on the standardized log `Density`); `concept_drift:` `claim_multiplier: 1.5` (claim rate multiplier, before clipping to `claim_nb_cap`) |
+| `training` | B | `selection_metric: poisson_deviance` (one of the metric names), `flaml_time_budget_s: 300`, `seed: 42` (the model seed); `glm:` `alpha: 0.0001`, `max_iter: 1000`, `solver: newton-cholesky` (`lbfgs` or `newton-cholesky`), `drivage_edges: [21, 25, 30, 40, 50, 60, 70]` (left edges of the DrivAge bands after 18; strictly increasing), `vehage_bins: 10` (VehAge quantile bins; at least 2) |
 | `traffic` | D | `batch_size: 100` |
 | `monitor` | D | `min_predictions: 200` (fewest predictions in the window for the data and prediction drift checks to run; at least 1), `drift_share_max: 0.2` (fail when the share of drifted rating factors is ≥ this value, so 2 of 9 ≈ 0.22 fails), `fail_on_prediction_drift: true`, `calibration_min: 0.9`, `calibration_max: 1.1`, `live_deviance_max_ratio: 1.2`, `rejection_rate_max: 0.05` |
 
@@ -237,7 +239,7 @@ Defaults target local development on the host. The compose value is what every c
 
 ### CLI — [`cli.py`](../src/claimfreq/cli.py)
 
-Every command exists with its final name and arguments. Only `fake-data` works today; the others print `not implemented yet — owner: Role X; see docs/contracts.md` and exit 3.
+Every command exists with its final name and arguments. `fake-data` and `train` work today; the others print `not implemented yet — owner: Role X; see docs/contracts.md` and exit 3.
 
 | Command | Owner | Reads → writes | Runs as |
 |---|---|---|---|
@@ -276,7 +278,7 @@ Every command exists with its final name and arguments. Only `fake-data` works t
   - Inside an image (DAG tasks, `docker compose run`): bare `claimfreq <command>`, `python ...`, or `dvc ...`, never `uv run`. The image's virtual environment is on `PATH`.
   - DVC stage `cmd`s are bare `claimfreq <stage>`. They resolve on the host too, because `uv run dvc repro` puts the project's virtual environment on `PATH`.
 - **`DATA_DIR`.** It stays unset in every Airflow task and every compose service, which means `data` under the repo root. Only development and tests set it.
-- **Environment.** DockerOperator tasks do NOT inherit the compose `environment:`, so every task must set its variables explicitly, to their compose values. The "Used by" column of the [environment table](#environment-variables--envpy) is the per-task list. `DATA_DIR` and `GIT_COMMIT` are excluded from this rule: no task sets them (`GIT_COMMIT` only as a manual override).
+- **Environment.** DockerOperator tasks do NOT inherit the compose `environment:`, so every task must set its variables explicitly, to their compose values. The "Used by" column of the [environment table](#environment-variables--envpy) is the per-task list. MLflow's own settings are not contract variables, so the table leaves them out; the only one a task sets is `MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT` on `train` ([DAGs](#dags)). `DATA_DIR` and `GIT_COMMIT` are excluded from this rule: no task sets them (`GIT_COMMIT` only as a manual override).
 - **`git_commit`.** The lineage tag uses `GIT_COMMIT` if set, else `git rev-parse HEAD` in the working directory. If neither works, the command fails with exit 1. `env.git_commit()` implements exactly this.
 - **`data_hash`.** The md5 of the bytes of the train split file actually read (`model.file_md5`); see [Model](#model--modelpy).
 - **`MONITORING_DB_URL`.** In compose: `postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/monitoring`, with the credentials from `.env`. The dev default stays `sqlite:///monitoring.db`. `psycopg[binary]` is a base dependency, because both images need it.
@@ -292,7 +294,7 @@ Airflow 3.4.0 (`apache/airflow:3.4.0-python3.12`, which ships the docker provide
 
 - **Files.** [`dags/training.py`](../dags/training.py) and [`dags/monitor.py`](../dags/monitor.py) define the DAGs. [`dags/claimfreq_tasks.py`](../dags/claimfreq_tasks.py) is the one DockerOperator factory, and [`dags/monitor_window.py`](../dags/monitor_window.py) holds the window rules (standard library only, tested by pytest).
 - **Every task** runs `claimfreq-trainer:latest` on the `claim-frequency-mlops_default` network, bind-mounts `HOST_REPO_DIR` at `/repo` as the working directory, and has `retries=0`.
-  - Each task gets only its own variables: `train` and `register` get `MLFLOW_TRACKING_URI`; `monitor` gets `MLFLOW_TRACKING_URI` and `EVIDENTLY_UI_URL`, plus `MONITORING_DB_URL` and `ALERT_WEBHOOK_URL` through `private_environment`; `dvc_repro` gets none.
+  - Each task gets only its own variables: `train` and `register` get `MLFLOW_TRACKING_URI`, and `train` also gets `MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT=true`, an MLflow setting that keeps the two URL lines MLflow prints for every run it ends (each FLAML trial is one) out of its log; `monitor` gets `MLFLOW_TRACKING_URI` and `EVIDENTLY_UI_URL`, plus `MONITORING_DB_URL` and `ALERT_WEBHOOK_URL` through `private_environment`; `dvc_repro` gets none.
   - `private_environment` values are built at run time from the Airflow containers' environment (filled from `.env`). They never appear in the DAG code, the rendered-template view, or the task logs.
 - **Airflow-only settings in `.env`** (only on the machine that runs the full stack): `HOST_REPO_DIR` (the repo's absolute host path; Docker resolves mount sources on the host), `AIRFLOW_FERNET_KEY`, `AIRFLOW_JWT_SECRET`, and on Linux `AIRFLOW_UID`. `.env.example` shows how to generate them.
 - **Docker socket.** Only `airflow-scheduler` mounts `/var/run/docker.sock`, because with `LocalExecutor` the tasks run there. Docker Desktop's socket is readable by the container's root group. On a Linux host the socket belongs to the `docker` group, so add that group id with `group_add` before running Airflow there.
@@ -310,7 +312,7 @@ Airflow 3.4.0 (`apache/airflow:3.4.0-python3.12`, which ships the docker provide
   - `retrain_on_drift` runs only when `monitor` failed. It triggers the `training` DAG (run id `drift__<monitor run id>`, conf `{"triggered_by": "monitor", ...}`) only for exit 10 (a failed check) and only when the `retrain_on_drift` param is true, which is the default. A crash (1) or a stub (3) never retrains. Retraining only produces a new challenger: promotion stays manual ([ADR-0007](adr/0007-semver-and-human-promotion.md)). The rule is [`dags/retrain_policy.py`](../dags/retrain_policy.py).
   - `monitor_failed` fails whenever `monitor` failed, so the DAG run stays red (the alert) even after a successful trigger. When `monitor` passes, it is skipped and the run succeeds.
   - Limitation: the triggered run trains on the data version the checked-out `dvc.lock` points to. Retraining fixes drift only once that data includes the new traffic (stretch goal "data v2", or a future step that folds `ground_truth` into the training data).
-  - The schedule is hourly, with real data intervals (`CronDataIntervalTimetable`): the 02:00 run covers `[01:00, 02:00)`. A plain `@hourly` in Airflow 3 gives zero-length intervals, so every scheduled run would check an empty window and pass silently; `monitor_window.py` raises on such an interval. The DAG can be paused for the demo.
+  - The schedule is hourly, with real data intervals (`CronDataIntervalTimetable`): the 02:00 run covers `[01:00, 02:00)`. A plain `@hourly` in Airflow 3 gives zero-length intervals, so every scheduled run would check an empty window and pass silently; `monitor_window.py` raises on such an interval. The DAG must be unpaused before a CLI trigger: Airflow leaves every run of a paused DAG queued, manual ones included.
   - Optional run params: `batch_id`, `since`, `until`, and `retrain_on_drift` (boolean, default true).
   - A scheduled run uses `--since {{ data_interval_start }} --until {{ data_interval_end }}`.
   - A manual run uses the `since` and `until` params when given; without them, it covers the last 24 hours. With `batch_id`, it also passes `--batch-id`.
@@ -320,9 +322,9 @@ Airflow 3.4.0 (`apache/airflow:3.4.0-python3.12`, which ships the docker provide
 
 ## Images
 
-- **Dependency groups** ([PEP 735](https://peps.python.org/pep-0735/)) in `pyproject.toml`; `trainer` and `api` are empty for now:
+- **Dependency groups** ([PEP 735](https://peps.python.org/pep-0735/)) in `pyproject.toml`. Each role adds its packages to `trainer` and `api` in its own PR (`trainer` already has `mlflow` and `skops` from #14):
   - `dev`: test and lint tools. API test dependencies (for example `httpx`, which FastAPI's `TestClient` needs) go here too.
-  - `trainer`: A adds `dvc[s3]`; B adds `mlflow`, `flaml[automl]`, `lightgbm`, `xgboost`, `skops`; D adds `evidently` and an HTTP client.
+  - `trainer`: A adds `dvc[s3]` and `httpx` (for `send-traffic`); B adds `mlflow`, `flaml[automl]`, `lightgbm`, `xgboost`, `skops`; D adds `evidently`.
   - `api`: D adds `fastapi`, `uvicorn`, `mlflow-skinny`, `lightgbm`, `xgboost`, `skops`.
   - `[tool.uv] default-groups = ["dev", "trainer", "api"]`, so a plain `uv sync` on a laptop installs everything. CI uses `uv sync --locked --all-groups` ([Dev setup](#dev-setup)).
   - After a rebase, re-run `uv lock` instead of hand-merging `uv.lock`.
@@ -335,7 +337,7 @@ Airflow 3.4.0 (`apache/airflow:3.4.0-python3.12`, which ships the docker provide
   - CI builds whichever Dockerfiles exist.
 - **Which code runs in the trainer container.** The trainer image installs the project in editable mode (uv's default) from `WORKDIR /repo`. Every DockerOperator task and the compose `trainer` service bind-mount the host repo root at `/repo` as the working directory, so the code, `params.yaml`, `dvc.lock`, and `.git` all come from the checked-out revision. Rebuild the image only when dependencies change. The `api` image is self-contained: it copies the source at build time and uses no bind mount.
 - **The `trainer` service and image.** The image is tagged `claimfreq-trainer:latest`, built with `docker compose --profile tools build trainer`. The compose `trainer` service is in the `tools` profile, so `docker compose up` does not start it; run commands with `docker compose run --rm trainer claimfreq <command>`. It waits for a healthy `postgres`, and sets the compose values of `MLFLOW_TRACKING_URI`, `MONITORING_DB_URL`, `API_URL`, `EVIDENTLY_UI_URL`, and `ALERT_WEBHOOK_URL`.
-- **`.dockerignore`** keeps `.env`, `.dvc/config.local`, `.venv`, `data/`, `*.db`, and `.git` out of every build context, so no secret can be baked into an image.
+- **`.dockerignore`** keeps `.env`, every `.dvc/config.local` (root or nested), `.dvc/tmp/`, `.venv`, `data/`, `*.db`, and `.git` out of every build context, so no secret can be baked into an image.
 - **Compose services.** Role C writes the compose services `postgres`, `mlflow` (published 5001→5000), the Airflow services, `trainer`, and `api` (built from `docker/api.Dockerfile`, published 8000→8000, healthcheck on `/health`). Role D writes the `evidently-ui` service (published 8001→8000, its image version equal to `evidently` in `uv.lock`), and Role C reviews it. Role D also owns `docker/api.Dockerfile` and the Evidently project that `monitor` pushes to.
 - Airflow and its docker provider live only in the Airflow image, outside this `pyproject.toml` ([ADR-0003](adr/0003-airflow-with-docker-operator.md)).
 - **API entry point** and the `create_app` factory: see "The app" under [API](#api--apipy).
@@ -361,11 +363,11 @@ When you implement a command, remove its entries from `STUBS` in [`tests/test_cl
 
 Then, per role:
 
-- **A. Data.** Implement `ingest` first. Download OpenML 41214, strip the quotes from `VehGas`, and select columns by name. Then run `validate_frame(df, "raw")` on the frame as read (its float `IDpol` and `ClaimNb` pass, being whole numbers) and `coerce_frame` before writing `raw/freMTPL2freq.parquet`. Continue with `clean`, `split`, and `make-drift`; the fake policies show what a valid clean frame looks like. `make_policies` produces clean-stage frames only, so A owns any raw-stage fake it needs for testing ingest. A also owns the future `drift:` section of `params.yaml`. Last, implement `send-traffic`, which replays your test and drift files through Role D's API; test it against a stub HTTP server until Role D's app lands:
+- **A. Data.** Implement `ingest` first. Download OpenML 41214, strip the quotes from `VehGas`, and select columns by name. Then run `validate_frame(df, "raw")` on the frame as read (its float `IDpol` and `ClaimNb` pass, being whole numbers) and `coerce_frame` before writing `raw/freMTPL2freq.parquet`. Continue with `clean`, `split`, and `make-drift`; the fake policies show what a valid clean frame looks like. `make_policies` produces clean-stage frames only, so A owns any raw-stage fake it needs for testing ingest. A also owns the `drift:` section of `params.yaml`. Last, implement `send-traffic`, which replays your test and drift files through Role D's API; test it against a stub HTTP server until Role D's app lands:
 
   ```bash
   uv run claimfreq fake-data --rows 10000 --seed 3 --id-start 900000 --out data/fake/splits/test.parquet
-  DATA_DIR=data/fake uv run claimfreq send-traffic --source test   # stub for now: exits 3
+  DATA_DIR=data/fake uv run claimfreq send-traffic --source test   # needs the API running
   ```
 
 - **B. Modeling.** Implement `train` first, against fake splits under a git-ignored data directory:
@@ -386,7 +388,7 @@ Then, per role:
   ```
 
   It proves the mounts (the file appears under `data/fake/` in the repo on the host), that `MONITORING_DB_URL` reached the container (the assertion fails if it fell back to the SQLite default; SQLAlchemy masks the password in the message), and that Postgres is reachable. A stub's exit code 3 reaches a DAG task only when the task runs the command directly (`train`, `register`, `monitor`); under `dvc repro`, a stub stage shows as DVC's own failure. The `dvc repro` task also needs Role A's DVC setup before it can run ([DAGs](#dags)).
-- **D. Serving and monitoring.** Start with the FastAPI app. Build it with `create_app(model=TrueFrequencyModel())`, validate with `PredictRequest`, build the model input with `coerce_features`, and log with `prediction_log_rows` to the default SQLite `MONITORING_DB_URL`. Then implement `monitor` (compare the logs with `make_reference_frame`). Use at least 10,000 fake policies per window: on fewer, the calibration check is dominated by noise and raises false alarms even on clean traffic. To feed the API before Role A's `send-traffic` lands, post `make_predict_request` bodies from a test.
+- **D. Serving and monitoring.** Start with the FastAPI app. Build it with `create_app(model=TrueFrequencyModel())`, validate with `PredictRequest`, build the model input with `coerce_features`, and log with `prediction_log_rows` to the default SQLite `MONITORING_DB_URL`. Then implement `monitor` (compare the logs with `make_reference_frame`). Use at least 20,000 fake policies per window: on fewer, the calibration check is dominated by noise and raises false alarms, even on clean traffic and on `portfolio_shift`, which keeps only part of the window. To feed the API before Role A's `send-traffic` lands, post `make_predict_request` bodies from a test.
 
 ## Changing a contract
 

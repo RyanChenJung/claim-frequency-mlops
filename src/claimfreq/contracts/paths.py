@@ -46,15 +46,17 @@ class DriftScenario(StrEnum):
       valid in the other column, that is where ``VehAge`` is within ``VehPower``'s bounds
       (4-15); ``VehPower`` always fits ``VehAge``'s bounds (0-100). All other rows stay
       unchanged and the file keeps every test row. Passes the clean schema; only distribution
-      checks catch it.
+      checks are sure to catch it.
     - ``portfolio_shift``: weighted sampling without replacement from the test split, toward
       young (low ``DrivAge``) and dense (high ``Density``) policies. ``IDpol`` is kept, so it
       stays unique. Passes the clean schema. The exact weights are Role A's choice, as long as
-      mean ``DrivAge`` drops by at least 5 years and median ``Density`` rises by at least 50%.
+      mean ``DrivAge`` drops by at least 5 years and median ``Density`` rises by at least 50%,
+      and live deviance still passes: a stronger shift raises the sample's claim rate.
     - ``concept_drift``: rating factors unchanged; ``ClaimNb`` increased so that the true claim
       rate is higher, still clipped to ``clean.claim_nb_cap``. Passes the clean schema; only the
-      calibration ratio on ground truth catches it. The exact factor is Role A's choice, as long
-      as the file's observed claim rate is at least 25% above the test split's.
+      checks on ground truth catch it: the calibration ratio and live deviance. The exact factor
+      is Role A's choice, as long as the file's observed claim rate is at least 40% above the
+      test split's.
 
     ``send-traffic`` posts every column except ``IDpol``, ``ClaimNb``, and ``Exposure`` as is,
     with no coercion, uses ``IDpol`` as ``policy_id``, and keeps ``ClaimNb`` and ``Exposure``

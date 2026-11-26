@@ -10,7 +10,11 @@ requires-python = ">=3.12,<3.13"
 # outside this project (ADR-0003).
 dependencies = [
     "numpy",
-    "pandas>=3",
+    # Below 3.1: pandas 3.1 removed pandas.core.dtypes.common.infer_dtype_from_object, which
+    # evidently 0.7.23 (the monitor's library, #20) imports, so `import evidently` fails
+    # (https://github.com/evidentlyai/evidently/issues/1974). Drop the cap in the same PR that
+    # raises evidently's lower bound to the first release with the fix.
+    "pandas>=3,<3.1",
     "psycopg[binary]",  # PostgreSQL driver for MONITORING_DB_URL, needed by both images
     "pyarrow",
     "pydantic>=2",
@@ -23,16 +27,22 @@ dependencies = [
 claimfreq = "claimfreq.cli:main"
 
 [dependency-groups]
-# Test and lint tools, never installed in an image. API test dependencies (for example httpx,
-# which FastAPI's TestClient needs) go here too.
+# Test, lint, and analysis tools (matplotlib for scripts/eda.py), never installed in an image.
+# API test dependencies (for example httpx, which FastAPI's TestClient needs) go here too.
 dev = [
+    "matplotlib>=3.11.2",
     "pytest",
     "ruff",
 ]
 # Installed with the base dependencies in docker/trainer.Dockerfile (Role C). Role A adds
-# dvc[s3]; Role B adds mlflow, flaml[automl], lightgbm, xgboost, skops; Role D adds evidently
-# and an HTTP client. See docs/contracts.md, Images.
-trainer = []
+# dvc[s3] and httpx (for send-traffic); Role B adds mlflow, flaml[automl], lightgbm, xgboost,
+# skops; Role D adds evidently. See docs/contracts.md, Images.
+trainer = [
+    "dvc[s3]>=3,<4",
+    "httpx>=0.28.1",
+    "mlflow==3.18.0",
+    "skops>=0.16.0",
+]
 # Installed with the base dependencies in docker/api.Dockerfile (Role D). Role D adds fastapi,
 # uvicorn, mlflow-skinny, lightgbm, xgboost, skops.
 api = []

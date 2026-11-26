@@ -4,7 +4,7 @@
 as stage params, so changing a value reruns only the stages that depend on it. Each section is
 owned by one role:
 
-- ``split``, ``clean``: Role A (Data). Role A will add its own ``drift`` section later.
+- ``split``, ``clean``, ``drift``: Role A (Data).
 - ``training``: Role B (Modeling).
 - ``traffic``, ``monitor``: Role D (Serving and monitoring).
 
@@ -21,10 +21,10 @@ every field explicitly (a test checks the keys); the defaults here serve tests a
 """
 
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 from claimfreq.contracts.api import MAX_BATCH_SIZE
 from claimfreq.contracts.model import MetricName
@@ -69,6 +69,63 @@ class CleanParams(_Section):
     exposure_cap: float = Field(default=DEFAULT_EXPOSURE_CAP, strict=True, gt=0)
 
 
+class PortfolioShiftParams(_Section):
+    """``portfolio_shift`` drift scenario: weighted sampling toward young drivers in dense areas.
+
+    Each test policy gets the weight ``exp(-age_weight * z(DrivAge) + density_weight *
+    z(log Density))``, where ``z`` standardizes a column over the test split, and a
+    ``sample_fraction`` of the policies is drawn without replacement with those weights.
+    """
+
+    # Share of the test split kept. Below 1, or the sample would be the whole split, unshifted.
+    sample_fraction: float = Field(default=0.4, strict=True, gt=0, lt=1)
+    # Larger values favour younger drivers more strongly.
+    age_weight: float = Field(default=1.5, strict=True, ge=0)
+    # Larger values favour denser areas more strongly (on the log scale: Density spans 1-27,000).
+    density_weight: float = Field(default=1.0, strict=True, ge=0)
+
+
+class ConceptDriftParams(_Section):
+    """``concept_drift`` drift scenario: same policies, more claims."""
+
+    # The claim rate is multiplied by about this factor, before clipping to clean.claim_nb_cap.
+    claim_multiplier: float = Field(default=1.5, strict=True, gt=1)
+
+
+class DriftParams(_Section):
+    """``make-drift`` knobs, Role A's own section.
+
+    ``make-drift`` checks the contract's minimum effect sizes at run time and exits 10 when a
+    knob is too weak (docs/contracts.md, Drift files).
+    """
+
+    portfolio_shift: PortfolioShiftParams = Field(default_factory=PortfolioShiftParams)
+    concept_drift: ConceptDriftParams = Field(default_factory=ConceptDriftParams)
+
+
+class GlmParams(_Section):
+    """Poisson GLM candidate (``train``): penalty, solver, and how numeric factors enter."""
+
+    # L2 penalty of PoissonRegressor; small, so it only keeps the one-hot design well conditioned.
+    alpha: float = Field(default=1e-4, strict=True, ge=0)
+    max_iter: int = Field(default=1000, strict=True, ge=1)
+    solver: Literal["lbfgs", "newton-cholesky"] = "newton-cholesky"
+    # Left edges of the DrivAge bands after the first band, which starts at the minimum age 18.
+    # Fine bands at young ages keep the young-driver effect visible.
+    drivage_edges: list[StrictInt] = Field(
+        default_factory=lambda: [21, 25, 30, 40, 50, 60, 70], strict=True, min_length=1
+    )
+    # VehAge enters as this many quantile bins.
+    vehage_bins: int = Field(default=10, strict=True, ge=2)
+
+    @model_validator(mode="after")
+    def _increasing_edges(self) -> Self:
+        edges = self.drivage_edges
+        if any(low >= high for low, high in zip(edges, edges[1:], strict=False)):
+            raise ValueError("drivage_edges must be strictly increasing")
+        return self
+
+
 class TrainingParams(_Section):
     """Model selection and AutoML settings."""
 
@@ -79,6 +136,7 @@ class TrainingParams(_Section):
     # Model seed (AutoML search, model fitting). Separate from the data seed, so retraining with
     # another seed leaves the splits, and so dvc.lock, unchanged.
     seed: int = _seed_field()
+    glm: GlmParams = Field(default_factory=GlmParams)
 
 
 class TrafficParams(_Section):
@@ -124,6 +182,7 @@ class Params(_Section):
     seed: int = _seed_field()
     split: SplitParams = Field(default_factory=SplitParams)
     clean: CleanParams = Field(default_factory=CleanParams)
+    drift: DriftParams = Field(default_factory=DriftParams)
     training: TrainingParams = Field(default_factory=TrainingParams)
     traffic: TrafficParams = Field(default_factory=TrafficParams)
     monitor: MonitorParams = Field(default_factory=MonitorParams)

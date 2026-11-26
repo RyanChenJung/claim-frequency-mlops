@@ -118,6 +118,16 @@ Each entry has four parts:
 - **Fix:** log trials as nested runs ourselves, and refit the best configuration as a plain scikit-learn Pipeline ([ADR-0006](adr/0006-flaml-for-automl.md)).
 - **Lesson:** spike the integration you depend on, not just the library.
 
+### Evidently cannot be imported on pandas 3.1
+
+- **Symptom:** on pandas 3.1, `import evidently` fails with `ImportError: cannot import name 'infer_dtype_from_object' from 'pandas.core.dtypes.common'`. pandas 3.1 removed that internal helper, and Evidently 0.7.23, the latest release as of November 2026, still imports it. Nothing earlier catches it: Evidently accepts any pandas from 1.3.5, and our lock already held 3.1.1. So `uv add --group trainer evidently`, the first step of [#20](https://github.com/RyanChenJung/claim-frequency-mlops/issues/20), succeeds, and only the import fails.
+- **Found by:** previewing the monitor checks on the real drift files while reviewing `make-drift` ([#55](https://github.com/RyanChenJung/claim-frequency-mlops/pull/55)), before any monitor code existed.
+- **Fix:** cap pandas below 3.1 until an Evidently release fixes [evidentlyai/evidently#1974](https://github.com/evidentlyai/evidently/issues/1974) ([#57](https://github.com/RyanChenJung/claim-frequency-mlops/pull/57)).
+  - With the cap, Evidently 0.7.23 locks on pandas 3.0.6, imports, and all our tests pass.
+  - Going down to pandas 2 was not an option: the schema relies on pandas 3's default `str` dtype, and four tests fail on 2.3.3.
+  - Side effect: pandas records its version in every parquet file, so the same rows written after the cap get a new md5, and with it a new `data_hash`.
+- **Lesson:** a lock that resolves can still fail to import, because the resolver trusts each package's declared bounds. Add the libraries you plan to use to the lock early and import each one, before the code that needs them is written.
+
 ## Process
 
 ### Planning a three-week build for four people
