@@ -41,7 +41,7 @@ These steps reproduce the whole pipeline on one machine, from a fresh clone. Ste
 
 ### 0. Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/), with at least **8 GB** of memory in its settings. The full stack (Postgres, MLflow, Airflow, the API, and the Evidently UI) needs about 4 GB.
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/), with at least **8 GB** of memory in its settings. The full stack (Postgres, MLflow, Airflow, the API, and the Evidently UI) uses about 2.5 GB, plus 1–2 GB for the trainer container while `train` runs.
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) **0.13.9 or newer within 0.13**. An older uv stops with a version error; `uv self update` fixes it. uv installs Python 3.12 itself.
 - git. On macOS, also `brew install libomp` (LightGBM and XGBoost need it).
 
@@ -184,7 +184,7 @@ docker compose --profile airflow down -v    # also deletes the data, for a fresh
 
 ## Development
 
-Work on a branch per issue and open a PR with `Closes #N`. `main` is protected: CI (lint, format, tests, DAG validation, `requirements.txt` freshness, image builds) must be green to merge. The [dev setup](docs/contracts.md#dev-setup) and each role's [day-1 quickstart](docs/contracts.md#develop-against-fakes) are in the contracts.
+Work on a branch per issue and open a PR with `Closes #N`; the [PR template](.github/pull_request_template.md) has the checklist. `main` is protected: CI (lint, format, tests, DAG validation, `requirements.txt` freshness, image builds) must be green to merge. The [dev setup](docs/contracts.md#dev-setup) and each role's [day-1 quickstart](docs/contracts.md#develop-against-fakes) are in the contracts.
 
 ## AI assistance
 

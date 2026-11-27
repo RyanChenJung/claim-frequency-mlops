@@ -40,9 +40,12 @@ dev = [
 # skops; Role D adds evidently. See docs/contracts.md, Images.
 trainer = [
     "dvc[s3]>=3,<4",
+    "flaml[automl]>=2.8.0",
     "httpx>=0.28.1",
+    "lightgbm>=4.7.0",
     "mlflow==3.18.0",
     "skops>=0.16.0",
+    "xgboost>=2.1.4",
 ]
 # Installed with the base dependencies in docker/api.Dockerfile (Role D). Role D adds fastapi,
 # uvicorn, mlflow-skinny, lightgbm, xgboost, skops.

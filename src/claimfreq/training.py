@@ -12,6 +12,12 @@ Model: candidate scope). Each child run carries:
   ``mlflow.sklearn`` and skops serialization, so ``register`` (a separate Airflow task, in a
   separate container) can register the winner without refitting it.
 
+Candidates (``training.candidates``): the ``constant`` baseline, a Poisson GLM
+(``poisson_glm``), a LightGBM Poisson model with fixed hyperparameters (``lightgbm``), and a FLAML
+search over Poisson tree models refitted as a plain scikit-learn Pipeline (``flaml``; see
+``claimfreq.automl``). The FLAML child run's ``algorithm`` is ``flaml:<best learner>``, and its
+trials are runs nested under it.
+
 Every candidate is a ``Pipeline`` with all preprocessing inside it, so it takes the raw rating
 factors of ``schema.FEATURE_COLUMNS``. It is fitted on claim frequency ``ClaimNb / Exposure``
 with ``sample_weight = Exposure`` (``model.split_xy_w``). Tunable values come from the
@@ -21,6 +27,7 @@ with ``sample_weight = Exposure`` (``model.split_xy_w``). Tunable values come fr
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from pathlib import Path
@@ -31,7 +38,9 @@ import mlflow.sklearn
 import numpy as np
 import pandas as pd
 import skops.io
+from lightgbm import LGBMRegressor
 from mlflow.models import infer_signature
+from mlflow.tracking import MlflowClient
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import PoissonRegressor
 from sklearn.pipeline import Pipeline
@@ -39,10 +48,11 @@ from sklearn.preprocessing import (
     FunctionTransformer,
     KBinsDiscretizer,
     OneHotEncoder,
+    OrdinalEncoder,
     StandardScaler,
 )
 
-from claimfreq import metrics
+from claimfreq import automl, metrics
 from claimfreq.contracts import env, paths, schema
 from claimfreq.contracts.model import (
     MLFLOW_EXPERIMENT_NAME,
@@ -57,7 +67,7 @@ from claimfreq.contracts.model import (
     file_md5,
     split_xy_w,
 )
-from claimfreq.contracts.params import GlmParams, Params, load_params
+from claimfreq.contracts.params import GlmParams, LightgbmParams, Params, load_params
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +81,15 @@ PARAM_SEED = "training.seed"
 # Algorithm tag values (docs/contracts.md, Model version tags).
 ALGORITHM_CONSTANT = "constant"
 ALGORITHM_POISSON_GLM = "poisson_glm"
+ALGORITHM_LIGHTGBM = "lightgbm"
+# The FLAML candidate's run name; its algorithm tag is f"{ALGORITHM_FLAML_PREFIX}<best learner>".
+CANDIDATE_FLAML = "flaml"
+ALGORITHM_FLAML_PREFIX = "flaml:"
+# FLAML-child tags: the best learner, the number of trials, and the best holdout deviance.
+# Tags, not metrics: a candidate run's metrics are only its own val_* (they reach /model-info).
+TAG_FLAML_BEST_LEARNER = "flaml_best_learner"
+TAG_FLAML_TRIALS = "flaml_trials"
+TAG_FLAML_BEST_HOLDOUT_DEVIANCE = "flaml_best_holdout_poisson_deviance"
 
 # How each rating factor enters the Poisson GLM. The choices are modeling decisions, not tunable
 # values; the tunable ones (penalty, solver, band edges, bin count) are in params.yaml.
@@ -89,18 +108,121 @@ VEHAGE_QUANTILE_METHOD = "averaged_inverted_cdf"
 ONE_HOT_UNKNOWN = "ignore"
 
 # Runtime libraries of a logged model, written to its requirements.txt instead of the whole uv
-# project. MLflow adds its own `mlflow` pin. LightGBM and XGBoost join when #16 adds them.
+# project. MLflow adds its own `mlflow` pin. A model whose final estimator comes from LightGBM
+# or XGBoost also lists that library (`model_requirements`); FLAML is never a requirement.
 MODEL_REQUIREMENTS = ("scikit-learn", "skops", "numpy", "pandas", "pyarrow")
+ESTIMATOR_LIBRARIES = ("lightgbm", "xgboost")
+
+
+@dataclass
+class Fitted:
+    """A fitted candidate, ready to log: its Pipeline, ``algorithm`` tag, params, and tags."""
+
+    pipeline: Pipeline
+    algorithm: str
+    params: dict[str, Any]
+    tags: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
 class Candidate:
-    """One model to train: its MLflow run name, ``algorithm`` tag, Pipeline, and params."""
+    """A candidate with a fixed Pipeline: fitting it is one ``Pipeline.fit``."""
 
     name: str
     algorithm: str
     pipeline: Pipeline
     params: dict[str, Any] = field(default_factory=dict)
+
+    def fit(self, X: pd.DataFrame, y: np.ndarray, w: np.ndarray, run_id: str) -> Fitted:
+        """Fit the Pipeline with exposure weights; ``run_id`` (the child run) is unused."""
+        return Fitted(fit_candidate(self, X, y, w), self.algorithm, self.params)
+
+
+@dataclass
+class FlamlCandidate:
+    """The FLAML candidate: a search on the tree preprocessing, refitted as a Pipeline."""
+
+    params: Params
+    # The search itself; tests replace it to avoid a timed search.
+    search: Callable[..., automl.SearchResult] = automl.run_search
+    name: str = CANDIDATE_FLAML
+
+    def fit(self, X: pd.DataFrame, y: np.ndarray, w: np.ndarray, run_id: str) -> Fitted:
+        """Search on the train split, replay the trials under ``run_id``, and refit the best.
+
+        FLAML sees only the train split: it holds out ``training.flaml_holdout_ratio`` of it to
+        compare trials. The best configuration is then refitted on the whole train split,
+        behind the same preprocessing, with exposure weights.
+        """
+        training = self.params.training
+        preprocess = build_tree_preprocess()
+        result = self.search(
+            preprocess.fit_transform(X),
+            y,
+            w,
+            time_budget_s=training.flaml_time_budget_s,
+            max_iter=training.flaml_max_iter,
+            holdout_ratio=training.flaml_holdout_ratio,
+            seed=training.seed,
+        )
+        client = MlflowClient()
+        experiment_id = client.get_run(run_id).info.experiment_id
+        automl.log_trials(client, experiment_id, run_id, result.trials)
+        pipeline = Pipeline([("preprocess", preprocess), (ESTIMATOR_STEP, result.estimator)])
+        pipeline.fit(X, y, **{f"{ESTIMATOR_STEP}__sample_weight": w})
+        params = {
+            PARAM_SEED: training.seed,
+            "flaml.time_budget_s": training.flaml_time_budget_s,
+            "flaml.max_iter": training.flaml_max_iter,
+            "flaml.holdout_ratio": training.flaml_holdout_ratio,
+            "flaml.learners": ",".join(automl.LEARNERS),
+            "flaml.best_learner": result.learner,
+            **{f"best.{key}": value for key, value in result.config.items()},
+        }
+        tags = {
+            TAG_FLAML_BEST_LEARNER: result.learner,
+            TAG_FLAML_TRIALS: str(len(result.trials)),
+            TAG_FLAML_BEST_HOLDOUT_DEVIANCE: repr(result.best_loss),
+        }
+        return Fitted(pipeline, f"{ALGORITHM_FLAML_PREFIX}{result.learner}", params, tags)
+
+
+def build_tree_preprocess() -> ColumnTransformer:
+    """Return the preprocessing of the tree candidates: categories as ordinal codes.
+
+    Trees need no scaling or one-hot encoding. A category unseen in training becomes NaN, which
+    LightGBM, XGBoost, and HistGradientBoosting all treat as missing. Numeric factors pass
+    through unchanged, so the column order is the categorical factors, then the numeric ones.
+    """
+    return ColumnTransformer(
+        [
+            (
+                "ordinal",
+                OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=np.nan),
+                schema.CATEGORICAL_FEATURES,
+            ),
+            ("numeric", "passthrough", schema.NUMERIC_FEATURES),
+        ],
+        remainder="drop",
+        verbose_feature_names_out=False,
+    )
+
+
+def build_lightgbm_pipeline(lightgbm: LightgbmParams, seed: int) -> Pipeline:
+    """Return the unfitted LightGBM Poisson Pipeline with the hyperparameters of params.yaml."""
+    regressor = LGBMRegressor(
+        objective="poisson",
+        n_estimators=lightgbm.n_estimators,
+        learning_rate=lightgbm.learning_rate,
+        num_leaves=lightgbm.num_leaves,
+        min_child_samples=lightgbm.min_child_samples,
+        subsample=lightgbm.subsample,
+        subsample_freq=1,  # LightGBM ignores subsample unless bagging runs every k iterations
+        colsample_bytree=lightgbm.colsample_bytree,
+        random_state=seed,
+        verbose=-1,
+    )
+    return Pipeline([("preprocess", build_tree_preprocess()), (ESTIMATOR_STEP, regressor)])
 
 
 def build_glm_pipeline(glm: GlmParams) -> Pipeline:
@@ -170,28 +292,42 @@ def glm_logged_params(glm: GlmParams) -> dict[str, Any]:
     }
 
 
-def build_candidates(params: Params) -> list[Candidate]:
-    """Return the candidates of this PR: the constant baseline and a Poisson GLM.
+def build_candidates(params: Params) -> list[Candidate | FlamlCandidate]:
+    """Return the candidates listed in ``training.candidates``, in that order.
 
-    Neither candidate is random, but every candidate logs ``training.seed``, so runs stay
-    comparable once random candidates (LightGBM, FLAML) join the set.
+    Every candidate logs ``training.seed``, including the non-random ones, so runs stay
+    comparable across the candidate set.
     """
-    seed = {PARAM_SEED: params.training.seed}
-    glm = params.training.glm
-    return [
-        Candidate(
+    training = params.training
+    seed = {PARAM_SEED: training.seed}
+    glm = training.glm
+    lightgbm = training.lightgbm
+    builders: dict[str, Callable[[], Candidate | FlamlCandidate]] = {
+        ALGORITHM_CONSTANT: lambda: Candidate(
             name=ALGORITHM_CONSTANT,
             algorithm=ALGORITHM_CONSTANT,
             pipeline=Pipeline([(ESTIMATOR_STEP, ConstantFrequencyModel())]),
             params=seed,
         ),
-        Candidate(
+        ALGORITHM_POISSON_GLM: lambda: Candidate(
             name=ALGORITHM_POISSON_GLM,
             algorithm=ALGORITHM_POISSON_GLM,
             pipeline=build_glm_pipeline(glm),
             params={**seed, **glm_logged_params(glm)},
         ),
-    ]
+        ALGORITHM_LIGHTGBM: lambda: Candidate(
+            name=ALGORITHM_LIGHTGBM,
+            algorithm=ALGORITHM_LIGHTGBM,
+            pipeline=build_lightgbm_pipeline(lightgbm, training.seed),
+            params={
+                **seed,
+                "objective": "poisson",
+                **{f"lightgbm.{key}": value for key, value in lightgbm.model_dump().items()},
+            },
+        ),
+        CANDIDATE_FLAML: lambda: FlamlCandidate(params=params),
+    }
+    return [builders[name]() for name in training.candidates]
 
 
 def read_split(path: Path, params: Params) -> pd.DataFrame:
@@ -218,13 +354,18 @@ def skops_trusted_types(pipeline: Pipeline) -> list[str]:
     return skops.io.get_untrusted_types(data=skops.io.dumps(pipeline))
 
 
-def model_requirements() -> list[str]:
-    """Return the pinned runtime requirements of a logged model, from the installed versions."""
-    return [f"{package}=={version(package)}" for package in MODEL_REQUIREMENTS]
+def model_requirements(pipeline: Pipeline) -> list[str]:
+    """Return the pinned runtime requirements of a logged model, from the installed versions.
+
+    The base libraries, plus LightGBM or XGBoost when the final estimator comes from it.
+    """
+    library = type(pipeline[-1]).__module__.split(".")[0]
+    extra = (library,) if library in ESTIMATOR_LIBRARIES else ()
+    return [f"{package}=={version(package)}" for package in (*MODEL_REQUIREMENTS, *extra)]
 
 
 def log_candidate(
-    candidate: Candidate,
+    candidate: Candidate | FlamlCandidate,
     train_data: tuple[pd.DataFrame, np.ndarray, np.ndarray],
     validation_data: tuple[pd.DataFrame, np.ndarray, np.ndarray],
     tags: dict[str, str],
@@ -233,9 +374,11 @@ def log_candidate(
     X_train, y_train, w_train = train_data
     X_val, y_val, w_val = validation_data
     with mlflow.start_run(run_name=candidate.name, nested=True) as run:
-        mlflow.set_tags({**tags, TAG_ALGORITHM: candidate.algorithm})
-        mlflow.log_params(candidate.params)
-        pipeline = fit_candidate(candidate, X_train, y_train, w_train)
+        mlflow.set_tags(tags)
+        fitted = candidate.fit(X_train, y_train, w_train, run.info.run_id)
+        pipeline = fitted.pipeline
+        mlflow.set_tags({**fitted.tags, TAG_ALGORITHM: fitted.algorithm})
+        mlflow.log_params(fitted.params)
         predictions = pipeline.predict(X_val)
         scores = metrics.compute_all(y_val, predictions, w_val)
         mlflow.log_metrics(metrics.with_prefix(scores, MetricPrefix.VAL))
@@ -245,7 +388,7 @@ def log_candidate(
             serialization_format=mlflow.sklearn.SERIALIZATION_FORMAT_SKOPS,
             skops_trusted_types=skops_trusted_types(pipeline),
             signature=infer_signature(X_val, predictions),
-            pip_requirements=model_requirements(),
+            pip_requirements=model_requirements(pipeline),
         )
         return run.info.run_id
 
