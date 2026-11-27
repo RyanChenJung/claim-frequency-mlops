@@ -38,7 +38,6 @@ EXIT_NOT_IMPLEMENTED = 3
 EXIT_CHECK_FAILED = 10
 
 ROLE_DATA = "Role A (Data)"
-ROLE_MODELING = "Role B (Modeling)"
 ROLE_SERVING = "Role D (Serving and monitoring)"
 
 Handler = Callable[[argparse.Namespace], int]
@@ -133,6 +132,86 @@ def _train(args: argparse.Namespace) -> int:
     parent_run_id = train()
     print(f"train: logged candidate set {parent_run_id}")
     return EXIT_OK
+
+
+def _registry_command(action: Callable[[], str]) -> int:
+    """Run a registry action (``register``, ``promote``, ``evaluate-test``).
+
+    Print its report, or exit 10 on a failed check.
+    """
+    # Imported here so `--help` and the stubs stay fast and need no mlflow.
+    from claimfreq.registry import RegistryCheckError
+
+    try:
+        print(action())
+    except RegistryCheckError as error:
+        print(error, file=sys.stderr)
+        return EXIT_CHECK_FAILED
+    return EXIT_OK
+
+
+def _register(args: argparse.Namespace) -> int:
+    """Register the best candidate of the latest train run as challenger; exit 10 if none."""
+
+    def action() -> str:
+        from claimfreq.registry import register
+
+        result = register()
+        lines = []
+        if result.skipped_parents:
+            lines.append(
+                f"register: skipped {result.skipped_parents} newer train run(s) that did not "
+                f"finish; falling back to candidate set {result.candidate_set}"
+            )
+        if result.already_registered:
+            lines.append(
+                f"register: run {result.run_id} (candidate set {result.candidate_set}) is "
+                f"already version {result.version} ({result.semver}); nothing registered"
+            )
+        else:
+            lines.append(
+                f"register: version {result.version} ({result.semver}, {result.algorithm}) "
+                f"from candidate set {result.candidate_set} is the challenger"
+            )
+        return "\n".join(lines)
+
+    return _registry_command(action)
+
+
+def _promote(args: argparse.Namespace) -> int:
+    """Move the champion alias to ``--version``; exit 10 if that version does not exist."""
+
+    def action() -> str:
+        from claimfreq.contracts.model import TAG_SEMVER
+        from claimfreq.registry import promote
+
+        result = promote(args.version)
+        target, previous = result.target, result.previous
+        was = f"version {previous.version}" if previous is not None else "no champion"
+        cleared = "; challenger alias cleared" if result.cleared_challenger else ""
+        return (
+            f"promote: champion is now version {target.version} "
+            f"({target.tags.get(TAG_SEMVER, 'no semver')}); was {was}{cleared}. Restart the api "
+            "container to serve it."
+        )
+
+    return _registry_command(action)
+
+
+def _evaluate_test(args: argparse.Namespace) -> int:
+    """Score the champion on splits/test and log test_* metrics on its run; exit 10 if none."""
+
+    def action() -> str:
+        from claimfreq.evaluation import evaluate_test
+
+        result = evaluate_test()
+        scores = ", ".join(f"{key} {value:.4f}" for key, value in result.metrics.items())
+        return (
+            f"evaluate-test: champion version {result.version} ({result.semver}) on the test "
+            f"split: {scores}; logged on run {result.run_id}"
+        )
+
+    return _registry_command(action)
 
 
 # argparse types raise ArgumentTypeError: for any other error, argparse would print the
@@ -280,12 +359,12 @@ def build_parser() -> argparse.ArgumentParser:
         "Register the best candidate of the latest train run by selection_metric with alias "
         "'challenger', its tags, and the reference dataset, and log its comparison with the "
         "'champion'.",
-        _not_implemented(ROLE_MODELING),
+        _register,
     )
     promote = add(
         "promote",
         "Move the 'champion' alias to a registered model version (a human decision).",
-        _not_implemented(ROLE_MODELING),
+        _promote,
     )
     promote.add_argument(
         "--version", type=_positive_int, required=True, metavar="N", help="registry version"
@@ -293,7 +372,7 @@ def build_parser() -> argparse.ArgumentParser:
     add(
         "evaluate-test",
         "Evaluate the champion on splits/test and log test_* metrics.",
-        _not_implemented(ROLE_MODELING),
+        _evaluate_test,
     )
 
     # Role A (Data) owns send-traffic: it replays Role A's test and drift files through the API.

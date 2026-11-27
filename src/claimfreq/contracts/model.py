@@ -17,10 +17,11 @@ Model artifact format (what ``train`` logs, ``register`` registers, and the API 
 
 - The champion is a scikit-learn ``Pipeline`` with all preprocessing (for example categorical
   encoding) inside it, so it takes the raw rating factors.
-- ``train`` logs every candidate's fitted Pipeline in its own child run, at
-  ``MODEL_ARTIFACT_PATH``, with ``mlflow.sklearn`` using skops serialization; its
-  ``skops_trusted_types`` are listed at log time. ``train`` and ``register`` run in separate
-  containers, so ``register`` registers ``runs:/<best child run id>/model`` instead of refitting.
+- ``train`` logs every candidate's fitted Pipeline with ``mlflow.sklearn`` using skops
+  serialization, as an MLflow logged model named ``MODEL_ARTIFACT_PATH`` linked to the
+  candidate's child run; its ``skops_trusted_types`` are listed at log time. ``train`` and
+  ``register`` run in separate containers, so ``register`` registers the best child's logged
+  model (``models:/<model id>``) instead of refitting. The version's ``run_id`` is that child.
 - The logged model has an MLflow signature inferred from the validation features, so pyfunc
   enforces the input schema (column names and dtypes of ``FEATURE_COLUMNS``).
 - The API resolves ``@champion`` to a version number and loads that version with
@@ -139,8 +140,8 @@ class MetricPrefix(StrEnum):
 
 # --- Model artifact -----------------------------------------------------------------------------
 
-# Artifact path of the fitted Pipeline in each `train` child run; `register` registers
-# runs:/<run id>/MODEL_ARTIFACT_PATH.
+# Name of the MLflow logged model holding the fitted Pipeline of each `train` child run (in
+# MLflow 3, a logged model linked to the run). `register` registers it by its model id.
 MODEL_ARTIFACT_PATH = "model"
 
 # --- Reference dataset artifact -----------------------------------------------------------------

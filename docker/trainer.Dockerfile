@@ -1,7 +1,7 @@
 # Trainer image (Role C; docs/contracts.md, Images and Runtime). Every Airflow DockerOperator
 # task and `docker compose run --rm trainer claimfreq <command>` run in it. At run time the
 # host repo is bind-mounted at /repo, so the code, params.yaml, dvc.lock, and .git all come
-# from the checked-out revision; rebuild the image only when dependencies change.
+# from the checked-out revision; rebuild the image when dependencies or this file change.
 FROM python:3.12-slim
 
 # libgomp1: the OpenMP runtime LightGBM and XGBoost need. git: `git rev-parse HEAD` for the
@@ -33,6 +33,11 @@ RUN uv sync --locked --no-default-groups --group trainer --no-install-project
 # the bind mount replaces with the host checkout at run time.
 COPY src ./src
 RUN uv sync --locked --no-default-groups --group trainer
+
+# Unbuffered output. stdout is block-buffered when it is not a terminal, so in the Airflow task
+# log, stderr lines would otherwise show up before stdout lines that were printed ahead of them,
+# and a run that is killed, for example by `timeout`, would lose the lines it still held.
+ENV PYTHONUNBUFFERED=1
 
 # Inside the image, commands are bare `claimfreq ...`, never `uv run` (docs/contracts.md).
 CMD ["claimfreq", "--help"]

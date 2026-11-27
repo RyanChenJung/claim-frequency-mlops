@@ -180,11 +180,11 @@ docker compose --profile airflow down -v    # also deletes the data, for a fresh
 - **uv `required-version` error**: run `uv self update`.
 - **`password authentication failed` in `docker compose logs mlflow` after you change `POSTGRES_PASSWORD`**: Postgres sets the password only on the first start of an empty volume. Put the old value back, or start fresh with `docker compose --profile airflow down -v`. That deletes every MLflow run and model version, the Airflow history, and the prediction logs, but not `data/`.
 - **Airflow tasks fail with `permission denied` on `/var/run/docker.sock` (Linux)**: the socket belongs to the `docker` group. Add that group id to `airflow-scheduler` with `group_add` in `docker-compose.yml`.
-- **A task fails with exit code 3**: that command is still a stub, and the message names the role that owns it. Exit 10 means a check failed, and exit 1 an unexpected error ([contracts: exit codes](docs/contracts.md#cli--clipy)).
+- **A task fails with exit code 3**: that command is still a stub, and the message names the role that owns it. Exit 10 means a check failed, and exit 1 an unexpected error ([contracts: exit codes](docs/contracts.md#cli--clipy)). Exit 124 means a `monitor` run hung until its 30-minute `timeout` ended it, for example on an Evidently UI that never answered. When it hangs in the Evidently push, the checks have already run: their lines are in the task log above the hang, but a failed check then sends no alert and triggers no retraining. Trigger `monitor` again once the UI answers.
 
 ## Development
 
-Work on a branch per issue and open a PR with `Closes #N`. `main` is protected: CI (lint, format, tests, DAG validation, `requirements.txt` freshness, image builds) must be green to merge. The [dev setup](docs/contracts.md#dev-setup) and each role's [day-1 quickstart](docs/contracts.md#develop-against-fakes) are in the contracts.
+Work on a branch per issue and open a PR with `Closes #N`; the [PR template](.github/pull_request_template.md) has the checklist. `main` is protected: CI (lint, format, tests, DAG validation, `requirements.txt` freshness, image builds) must be green to merge. The [dev setup](docs/contracts.md#dev-setup) and each role's [day-1 quickstart](docs/contracts.md#develop-against-fakes) are in the contracts.
 
 ## AI assistance
 

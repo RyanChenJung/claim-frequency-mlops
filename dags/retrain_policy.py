@@ -4,7 +4,8 @@ Standard library only, so pytest checks it on the host without Airflow.
 
 The rule: retrain only when `claimfreq monitor` exited 10 ("check failed", i.e. drift or
 decay was detected) and the run's ``retrain_on_drift`` param is on. A crash (1), a usage
-error (2), or a stub (3) is a platform problem, and retraining would not fix it. Promotion
+error (2), a stub (3), or a run that `timeout` ended (124) is a platform problem, and
+retraining would not fix it. Promotion
 stays a human decision (ADR-0007): retraining only produces a new challenger.
 """
 

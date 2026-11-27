@@ -38,6 +38,7 @@ def test_exit_code_from_message(message, expected):
         (10, False, False),  # retraining switched off for this run
         (1, True, False),  # a crash: retraining would not fix it
         (3, True, False),  # a stub: nothing to retrain from
+        (124, True, False),  # a monitor run that hung until `timeout` ended it
         (None, True, False),  # no exit code recorded
     ],
 )
