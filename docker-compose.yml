@@ -4,6 +4,7 @@
 #   cp .env.example .env              # then fill in the required values
 #   docker compose up -d              # postgres and mlflow: enough for development
 #   open http://localhost:5001        # MLflow UI (5000 is macOS AirPlay)
+#   docker compose up -d --build api  # adds the API on http://localhost:8000 ("api" profile)
 #
 # Airflow runs only on the demo machine, in the "airflow" profile (it also needs the Airflow
 # keys in .env):
@@ -131,6 +132,42 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  # The FastAPI app (docs/contracts.md, API). The "api" profile keeps a plain
+  # `docker compose up` from starting it, so port 8000 stays free for a dev server on the host.
+  # `docker compose up -d --build api` starts it with both of its dependencies;
+  # --build matters, because the image copies the source in at build time. After a code
+  # change, use `docker compose build api && docker compose up -d api`: `up --build` also
+  # rebuilds mlflow's image, and the new image ID makes compose recreate that container.
+  api:
+    profiles: ["api"]
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: claimfreq-api:latest
+    # Compose values from docs/contracts.md (Environment variables).
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MONITORING_DB_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/monitoring
+    ports:
+      - "127.0.0.1:8000:8000"
+    # The app exits at startup when Postgres is unreachable, and one champion lookup against
+    # an unreachable MLflow spends minutes in MLflow's own HTTP retries, so wait for both.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    # /health is a readiness check: HTTP 503 until a champion is loaded, so after the start
+    # period the container shows "unhealthy" until then. Nothing waits on that status. The
+    # image has no curl; urlopen raises on the 503.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
 
   # One-shot: checks the Airflow keys, creates or upgrades the metadata database, then exits.
   # The other Airflow services start only after it succeeds.

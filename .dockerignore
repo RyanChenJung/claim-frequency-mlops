@@ -2,8 +2,8 @@
 # here can be baked into an image layer (and builds stay fast).
 
 # Secrets. `**/` also matches the repo root, so this covers the root file and any nested copy.
-.env
-*.env.local
+**/.env
+**/*.env.local
 **/.dvc/config.local
 
 # Local environments, caches, and data. .dvc/tmp/ holds DVC's locks and, during a
@@ -16,7 +16,8 @@ data/
 *.db
 mlruns/
 mlartifacts/
-__pycache__/
+# Python writes one in every folder it imports modules from, so match it at any depth.
+**/__pycache__/
 .pytest_cache/
 .ruff_cache/
 

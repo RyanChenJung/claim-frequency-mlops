@@ -87,10 +87,14 @@ Teammates with DagsHub access can instead fetch the versioned data with `uv run 
 docker compose up -d                            # postgres and mlflow
 docker compose --profile tools build trainer    # the image every pipeline step runs in
 docker compose --profile airflow up -d          # adds Airflow
+docker compose up -d --build api                # adds the API
 ```
 
 - MLflow: <http://localhost:5001>.
 - Airflow: <http://localhost:8080>, with no login. It is only reachable from this machine.
+- API: <http://localhost:8000/docs>. Until the API has loaded a champion (step 6), `/health` answers HTTP 503 and `docker compose ps` lists `api` as unhealthy; both are expected.
+  - The API is in the `api` profile, so a plain `docker compose up -d` leaves port 8000 free for a dev server. Naming the service, as above, starts it without `--profile api`.
+  - The image copies the source in at build time, so `docker compose restart api` keeps the old code. After a code change, run `docker compose build api && docker compose up -d api`. Running `up -d --build api` again also recreates the `mlflow` container, which restarts MLflow, even in the middle of a training run.
 - Both DAGs start paused, and a paused DAG runs nothing: a manual trigger just waits in the queue. Unpause them once:
 
 ```bash
@@ -110,7 +114,7 @@ docker compose exec airflow-scheduler airflow dags trigger training
 
 The `training` DAG runs `dvc_repro → train → register`. In MLflow, the candidates appear under the `claim-frequency` experiment, and the best one is registered as model `claim-frequency` with alias `challenger`. On the full data, `train` takes about 6 minutes, because FLAML searches for `training.flaml_time_budget_s` (300 s in `params.yaml`).
 
-### 6. Promote and serve ⏳ [#15](https://github.com/RyanChenJung/claim-frequency-mlops/issues/15), [#17](https://github.com/RyanChenJung/claim-frequency-mlops/issues/17), [#22](https://github.com/RyanChenJung/claim-frequency-mlops/issues/22)
+### 6. Promote and serve ⏳ [#15](https://github.com/RyanChenJung/claim-frequency-mlops/issues/15), [#17](https://github.com/RyanChenJung/claim-frequency-mlops/issues/17)
 
 Pick the version number `N` of the challenger in MLflow (Models → `claim-frequency`). Promotion is a human decision ([ADR-0007](docs/adr/0007-semver-and-human-promotion.md)). To compare the challenger with the champion, open the version's source run: `register` logs the comparison there as tags, against the version that was champion when it ran (`champion_version`). `beats_champion` is `true`, `false`, `no_champion`, or `incomparable` (the schema changed), and `champion_val_<metric>` is that champion re-scored on the same validation split.
 
@@ -119,6 +123,7 @@ A later retrain on unchanged data (the same `data_hash` as the champion), such a
 ```bash
 docker compose run --rm trainer claimfreq promote --version N
 docker compose restart api                      # the API loads @champion at startup
+until curl -sf localhost:8000/health > /dev/null; do sleep 2; done   # wait for the champion
 curl -s localhost:8000/model-info               # the first champion reports semver 1.0.0
 ```
 
@@ -133,6 +138,12 @@ docker compose run --rm trainer claimfreq evaluate-test
 ```
 
 This logs `test_*` metrics on the champion's run. The test set is used only here, and as clean traffic in the next step.
+
+The API reads the champion's metrics only when it loads the champion, so restart it to see the `test_*` metrics in `/model-info`:
+
+```bash
+docker compose restart api
+```
 
 ### 8. Clean traffic: no alert ⏳ [#20](https://github.com/RyanChenJung/claim-frequency-mlops/issues/20), [#25](https://github.com/RyanChenJung/claim-frequency-mlops/issues/25)
 
@@ -168,9 +179,11 @@ Otherwise the scheduled run at the next full hour checks these batches again, po
 ### 10. Stop
 
 ```bash
-docker compose --profile airflow down       # keeps the data in Docker volumes
-docker compose --profile airflow down -v    # also deletes the data, for a fresh start
+docker compose --profile airflow --profile api down       # keeps the data in Docker volumes
+docker compose --profile airflow --profile api down -v    # also deletes the data, for a fresh start
 ```
+
+Name both profiles: `down` leaves running the services of any profile you do not name, so without `--profile api` the API keeps running.
 
 ### Troubleshooting
 
@@ -178,7 +191,7 @@ docker compose --profile airflow down -v    # also deletes the data, for a fresh
 - **`Set AIRFLOW_FERNET_KEY, AIRFLOW_JWT_SECRET, and HOST_REPO_DIR in .env`**: `airflow-init` checks these before Airflow starts. See step 2.
 - **Port 5000 is taken on macOS**: that is the AirPlay Receiver, which is why MLflow is published on 5001.
 - **uv `required-version` error**: run `uv self update`.
-- **`password authentication failed` in `docker compose logs mlflow` after you change `POSTGRES_PASSWORD`**: Postgres sets the password only on the first start of an empty volume. Put the old value back, or start fresh with `docker compose --profile airflow down -v`. That deletes every MLflow run and model version, the Airflow history, and the prediction logs, but not `data/`.
+- **`password authentication failed` in `docker compose logs mlflow` after you change `POSTGRES_PASSWORD`**: Postgres sets the password only on the first start of an empty volume. Put the old value back, or start fresh with `docker compose --profile airflow --profile api down -v`. That deletes every MLflow run and model version, the Airflow history, and the prediction logs, but not `data/`.
 - **Airflow tasks fail with `permission denied` on `/var/run/docker.sock` (Linux)**: the socket belongs to the `docker` group. Add that group id to `airflow-scheduler` with `group_add` in `docker-compose.yml`.
 - **A task fails with exit code 3**: that command is still a stub, and the message names the role that owns it. Exit 10 means a check failed, and exit 1 an unexpected error ([contracts: exit codes](docs/contracts.md#cli--clipy)). Exit 124 means a `monitor` run hung until its 30-minute `timeout` ended it, for example on an Evidently UI that never answered. When it hangs in the Evidently push, the checks have already run: their lines are in the task log above the hang, but a failed check then sends no alert and triggers no retraining. Trigger `monitor` again once the UI answers.
 
