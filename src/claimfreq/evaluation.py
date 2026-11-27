@@ -14,8 +14,9 @@ test split, which no other command reads, and logs ``test_*`` metrics on the cha
   splits on disk then belong to another data version, whose test split may hold the
   champion's own training rows (the same guard as ``register``'s).
 - The test split's md5 is logged as tag ``test_data_hash`` on the same run, so the ``test_*``
-  metrics say which file they were measured on. Re-running ``evaluate-test`` appends a new step
-  to each metric; MLflow reports the latest.
+  metrics say which file they were measured on. Each run of ``evaluate-test`` logs its
+  values at the next step (0, 1, ...), so the metric history keeps every evaluation and MLflow
+  reports the latest.
 """
 
 from __future__ import annotations
@@ -98,7 +99,9 @@ def evaluate_test(params: Params | None = None) -> Evaluation:
     scores = metrics.with_prefix(metrics.compute_all(y, predictions, w), MetricPrefix.TEST)
 
     for key, value in scores.items():
-        client.log_metric(champion.run_id, key, value)
+        # The next step, so repeated evaluations stay ordered in the metric history.
+        step = len(client.get_metric_history(champion.run_id, key))
+        client.log_metric(champion.run_id, key, value, step=step)
     client.set_tag(champion.run_id, TAG_TEST_DATA_HASH, file_md5(test_path))
     return Evaluation(
         version=str(champion.version),

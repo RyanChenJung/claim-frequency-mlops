@@ -82,13 +82,14 @@ def test_scores_the_champion_not_the_newer_challenger(workspace, champion):
     assert not TEST_KEYS & set(client.get_run(challenger.run_id).data.metrics)
 
 
-def test_rerun_appends_a_step(workspace, champion):
+def test_each_rerun_logs_at_the_next_step(workspace, champion):
     client, version = champion
     first = evaluate_test()
     second = evaluate_test()
     assert first.metrics == second.metrics
-    key = f"{MetricPrefix.TEST}{MetricName.GINI}"
-    assert len(client.get_metric_history(version.run_id, key)) == 2
+    for key in TEST_KEYS:
+        history = client.get_metric_history(version.run_id, key)
+        assert sorted(m.step for m in history) == [0, 1]
 
 
 def test_cli_prints_the_version_and_metrics(workspace, champion, capsys):

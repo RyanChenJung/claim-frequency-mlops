@@ -5,6 +5,9 @@ what FLAML actually logged; ``test_flaml_sees_only_the_train_split`` replaces th
 recorder instead, to check its inputs exactly.
 """
 
+import subprocess
+import sys
+
 import mlflow
 import numpy as np
 import pandas as pd
@@ -217,6 +220,50 @@ def test_flaml_sees_only_the_train_split(workspace):
     assert fitted.algorithm == "flaml:histgb"
     # The best configuration is refitted on the whole train split.
     assert fitted.pipeline[-1].n_iter_ >= 1
+
+
+# --- FLAML: every learner's refit path, one learner at a time --------------------------------
+
+
+@pytest.mark.parametrize("learner", ["xgboost", "xgb_limitdepth", "histgb"])
+def test_a_single_learner_search_refits_a_loadable_poisson_pipeline(
+    workspace, monkeypatch, learner
+):
+    # On fake data the winner is always lgbm, so restrict the search to one learner to run the
+    # refit -> skops log_model -> pyfunc load path for the others too (they win on real data).
+    # LEARNERS and POISSON_HP are patched together, as run_search reads both.
+    monkeypatch.setattr(automl, "LEARNERS", (learner,))
+    monkeypatch.setattr(automl, "POISSON_HP", {learner: automl.POISSON_HP[learner]})
+    client = MlflowClient()
+    parent_id = train(fast_params(candidates=["constant", "flaml"]))
+    child = _children(client, parent_id)[CANDIDATE_FLAML]
+    assert child.data.tags[TAG_FLAML_BEST_LEARNER] == learner
+    assert child.data.tags[TAG_ALGORITHM] == f"{ALGORITHM_FLAML_PREFIX}{learner}"
+
+    estimator = _load_pipeline(client, child)[-1]
+    estimator_class, key, poisson = LEARNER_ESTIMATORS[learner]
+    assert type(estimator) is estimator_class
+    assert estimator.get_params()[key] == poisson
+
+    requirements = _requirements(client, child)
+    assert "flaml" not in requirements
+    assert ("xgboost" in requirements) == learner.startswith("xgb")
+    assert "lightgbm" not in requirements
+
+    model = mlflow.pyfunc.load_model(logged_model_uri(client, child))
+    predictions = np.asarray(model.predict(coerce_features(make_policies(20, seed=3))), float)
+    assert predictions.shape == (20,) and (predictions > 0).all()
+
+
+def test_registry_and_evaluation_do_not_import_flaml():
+    # register, promote, and evaluate-test import training for read_split; the api image has
+    # no FLAML, so FLAML must load only when the FLAML candidate is fitted.
+    code = (
+        "import sys, claimfreq.registry, claimfreq.evaluation, claimfreq.training; "
+        "print('flaml' in sys.modules)"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "False"
 
 
 def test_model_requirements_follow_the_final_estimator():

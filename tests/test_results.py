@@ -2,8 +2,11 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from claimfreq.cli import EXIT_OK, main
 from claimfreq.results import DOES_NOT_BEAT, candidate_table, render
+from claimfreq.results import main as results_main
 
 
 def _run(run_id: str, algorithm: str, deviance: float) -> SimpleNamespace:
@@ -47,3 +50,33 @@ def test_report_after_evaluate_test_shows_the_champions_test_metrics(workspace):
     report = render()
     assert "version 1 (1.0.0, poisson_glm)" in report
     assert "| test |" in report and "| val |" in report
+
+
+def test_report_warns_when_the_champion_is_from_an_older_candidate_set(workspace):
+    for argv in (["train"], ["register"], ["promote", "--version", "1"]):
+        assert main(argv) == EXIT_OK
+    assert "**Note:**" not in render()
+    assert main(["train"]) == EXIT_OK  # a newer candidate set, e.g. a drift-triggered retrain
+    report = render()
+    assert "**Note:** the champion comes from candidate set" in report
+
+
+def test_output_is_written_and_a_failure_keeps_the_old_file(
+    workspace, tmp_path, capsys, monkeypatch
+):
+    out = tmp_path / "docs" / "results.md"
+    # Nothing trained yet: exit 10 with a results: message, and no file.
+    assert results_main(["--output", str(out)]) == 10
+    err = capsys.readouterr().err
+    assert err.startswith("results: ") and "register:" not in err
+    assert not out.exists()
+    assert main(["train"]) == EXIT_OK
+    assert results_main(["--output", str(out)]) == 0
+    first = out.read_text()
+    assert first.startswith("# Results")
+    # A crash while writing (here: the text cannot be encoded) leaves the old report intact.
+    monkeypatch.setattr("claimfreq.results.render", lambda: "# Results \ud800\n")
+    with pytest.raises(UnicodeEncodeError):
+        results_main(["--output", str(out)])
+    assert out.read_text() == first
+    assert list(out.parent.iterdir()) == [out]  # no temporary file left behind

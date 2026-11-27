@@ -29,6 +29,13 @@ H2O's modelling covers our needs: it supports a Poisson distribution and `weight
 - `python:3.12-slim` lacks `libgomp1`, which LightGBM needs.
 - `flaml[automl]` pins `xgboost<3`.
 
+## Consequences found in integration (2026-11-21)
+
+- **FLAML results do not repeat across runs**, even with the same data, code, and `training.seed`. With a time budget, FLAML chooses the next learner and when to grow the sample from measured trial times, so machine load changes the search. Six real-data runs picked xgboost, xgb_limitdepth, lgbm, and histgb as the winner; lowering `flaml_max_iter` does not fix it. The data and the fixed candidates (`constant`, `poisson_glm`, `lightgbm`) are deterministic: only the FLAML search moves.
+- **The registry, not retraining, pins a model.** To serve the same model again, promote its registered version; re-running `train` gives a different FLAML candidate.
+- **A retrain on an unchanged `data_hash` can still become `challenger`**, bumped MINOR (another learner won) or PATCH (the same learner won), even when it is worse than the champion. A small `beats_champion=true` margin on the same `data_hash` (for example 0.00035 in deviance) is search noise. Promotion stays a human decision (ADR-0007), and whoever runs `promote` should read the margin with that in mind.
+- **If repeatable search is ever needed:** `time_budget=-1` with a trial cap makes FLAML count trials instead of seconds (about 75 trials matched today's 5 minutes in one test), at the cost of no time limit on a slower machine. We keep the time budget for M2.
+
 ## Slide-ready text
 
 > **Why FLAML, not H2O?** Both handle Poisson targets with exposure weights. H2O needs a Java runtime in both training and serving images, and its MLflow flavor starts a JVM at inference time; it also lacks official Python 3.12 support. FLAML's best configuration refits into a plain scikit-learn pipeline, so our serving container stays small and has no AutoML dependency at all.
