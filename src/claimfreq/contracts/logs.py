@@ -127,8 +127,12 @@ def make_engine(url: str) -> Engine:
 
     On SQLite it enables foreign keys on every new connection, so the ``ground_truth`` foreign
     key holds in tests and local development as it does on PostgreSQL.
+
+    ``pool_pre_ping`` checks each pooled connection before handing it out and replaces one that
+    died, for example while Postgres restarted. The API keeps one engine for its whole life, so
+    without it the first request after a restart would fail with HTTP 500.
     """
-    engine = create_engine(url)
+    engine = create_engine(url, pool_pre_ping=True)
     if engine.dialect.name == "sqlite":
         event.listen(engine, "connect", _enable_sqlite_foreign_keys)
     return engine

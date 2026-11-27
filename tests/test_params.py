@@ -103,3 +103,26 @@ def test_seed_range_boundaries_are_accepted():
 def test_invalid_glm_params_are_rejected(glm):
     with pytest.raises(ValidationError):
         Params.model_validate({"training": {"glm": glm}})
+
+
+@pytest.mark.parametrize(
+    "training",
+    [
+        {"candidates": ["poisson_glm", "lightgbm"]},  # the constant baseline is required
+        {"candidates": ["constant", "constant"]},  # no repeats
+        {"candidates": ["constant", "xgboost"]},  # not a candidate name
+        {"flaml_max_iter": 0},
+        {"flaml_holdout_ratio": 1.0},
+        {"flaml_holdout_ratio": 0},
+        {"lightgbm": {"num_leaves": 1}},
+        {"lightgbm": {"subsample": 1.5}},
+        {"lightgbm": {"n_estimators": 10.0}},  # strict integer
+    ],
+)
+def test_invalid_training_params_are_rejected(training):
+    with pytest.raises(ValidationError):
+        Params.model_validate({"training": training})
+
+
+def test_candidates_default_to_every_candidate_in_order():
+    assert Params().training.candidates == ["constant", "poisson_glm", "lightgbm", "flaml"]
