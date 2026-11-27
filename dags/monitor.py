@@ -4,8 +4,9 @@ Tasks:
 
     monitor ──> retrain_on_drift ──> monitor_failed
 
-- ``monitor`` runs `claimfreq monitor` in the trainer image. Exit 10 means a check failed
-  (drift or decay detected); exit 1 or 3 means a crash or a stub.
+- ``monitor`` runs `claimfreq monitor` in the trainer image, under `timeout -v 30m`. Exit 10
+  means a check failed (drift or decay detected); exit 1 or 3 means a crash or a stub, and
+  124 a run that hung until the timeout ended it.
 - ``retrain_on_drift`` runs only when ``monitor`` failed. It triggers the ``training`` DAG
   only for exit 10 and only when the ``retrain_on_drift`` param is on; otherwise it is
   skipped. Retraining yields a new challenger; promotion stays manual (ADR-0007).
@@ -80,7 +81,14 @@ with DAG(
 ):
     monitor = trainer_task(
         "monitor",
-        "claimfreq monitor {{ monitor_args(dag_run.run_type, params,"
+        # `timeout` ends a run that hangs, for example on an Evidently UI that accepts the
+        # connection but never answers. The container exits 124, which never retrains, and
+        # the next hourly run can start; a normal run takes seconds. `-v` logs the timeout
+        # before the 124. The checks may already have run: a hang in the Evidently push
+        # drops a failed check's alert and its retraining. Airflow's
+        # execution_timeout would leave the container running: DockerOperator then fails to
+        # remove it while it runs (auto_remove="success"), and that error replaces the timeout.
+        "timeout -v 30m claimfreq monitor {{ monitor_args(dag_run.run_type, params,"
         " data_interval_start, data_interval_end) }}",
         environment={**MLFLOW, **EVIDENTLY},
         private_environment=monitoring_secrets(),
