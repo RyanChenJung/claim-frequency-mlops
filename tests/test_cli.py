@@ -24,11 +24,7 @@ from claimfreq.fakes import make_policies
 
 # (argv, owner) for every stubbed command, with its required arguments. When a role implements
 # a command, it removes that command's entries here (docs/contracts.md, Develop against fakes).
-STUBS = [
-    (["monitor"], "Role D"),
-    (["monitor", "--since", "2026-11-18T00:00:00+00:00", "--until", "2026-11-19"], "Role D"),
-    (["monitor", "--batch-id", "column_swap-1"], "Role D"),
-]
+STUBS = []
 # Every command of the CLI contract, stubbed or not.
 COMMANDS = {
     "ingest",

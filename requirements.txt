@@ -27,7 +27,9 @@ alembic==1.20.1
 amqp==5.4.2
     # via kombu
 annotated-doc==0.0.6
-    # via fastapi
+    # via
+    #   fastapi
+    #   typer
 annotated-types==0.8.0
     # via pydantic
 antlr4-python3-runtime==4.9.3
@@ -38,8 +40,10 @@ anyio==4.16.0
     # via
     #   fastapi
     #   httpx
+    #   litestar
     #   mlflow-skinny
     #   starlette
+    #   watchfiles
 appdirs==1.4.4
     # via iterative-telemetry
 asyncssh==2.24.1
@@ -71,6 +75,7 @@ celery==5.7.0
 certifi==2026.10.23
     # via
     #   databricks-sdk
+    #   evidently
     #   httpcore
     #   httpx
     #   requests
@@ -88,7 +93,10 @@ click==8.5.1
     #   click-repl
     #   flask
     #   gto
+    #   litestar
     #   mlflow-skinny
+    #   nltk
+    #   rich-click
     #   uvicorn
 click-didyoumean==0.3.1
     # via celery
@@ -103,7 +111,9 @@ cloudpickle==3.1.2
 colorama==0.4.6
     # via
     #   dvc
+    #   rich-click
     #   tqdm
+    #   typer
 configobj==5.0.9
     # via dvc
 contourpy==1.4.0
@@ -111,6 +121,7 @@ contourpy==1.4.0
 cryptography==50.0.2
     # via
     #   asyncssh
+    #   evidently
     #   google-auth
     #   mlflow
 cycler==0.12.1
@@ -119,6 +130,10 @@ databricks-sdk==0.167.0
     # via
     #   mlflow-skinny
     #   mlflow-tracing
+defusedxml==0.7.1
+    # via nltk
+deprecation==2.1.0
+    # via evidently
 dictdiffer==0.10.0
     # via dvc-data
 diskcache==5.6.3
@@ -154,8 +169,13 @@ dvc-studio-client==0.23.0
     # via dvc
 dvc-task==0.40.2
     # via dvc
+dynaconf==3.3.5
+    # via evidently
 entrypoints==0.4.2
     # via gto
+evidently==0.7.23
+faker==40.63.0
+    # via polyfactory
 fastapi==0.163.2
     # via mlflow-skinny
 filelock==4.2.12
@@ -175,6 +195,8 @@ flufl-lock==9.2.0
     # via dvc
 fonttools==4.68.0
     # via matplotlib
+formulaic==1.2.2
+    # via statsmodels
 frozenlist==1.8.0
     # via
     #   aiohttp
@@ -186,6 +208,7 @@ fsspec==2026.9.0
     #   dvc-http
     #   dvc-objects
     #   dvc-s3
+    #   evidently
     #   s3fs
     #   scmrepo
 funcy==2.1
@@ -222,7 +245,10 @@ h11==0.16.0
     #   uvicorn
 httpcore==1.0.9
     # via httpx
+httptools==0.9.0
+    # via uvicorn
 httpx==0.28.1
+    # via litestar
 huey==3.5.4
     # via mlflow
 hydra-core==1.3.8
@@ -235,8 +261,12 @@ idna==3.20
     #   yarl
 importlib-metadata==10.2.0
     # via mlflow-skinny
+interface-meta==2.0.1
+    # via formulaic
 iterative-telemetry==0.0.10
-    # via dvc
+    # via
+    #   dvc
+    #   evidently
 itsdangerous==2.2.0
     # via flask
 jinja2==3.1.6
@@ -246,7 +276,9 @@ jmespath==1.1.0
     #   aiobotocore
     #   botocore
 joblib==1.6.0
-    # via scikit-learn
+    # via
+    #   nltk
+    #   scikit-learn
 kiwisolver==1.5.1
     # via matplotlib
 kombu==5.7.0
@@ -258,6 +290,10 @@ lazy-importer==0.1.0
     # via importlib-metadata
 lightgbm==4.7.0
     # via flaml
+litestar==2.25.0
+    # via evidently
+litestar-htmx==0.5.0
+    # via litestar
 mako==1.4.3
     # via alembic
 markdown-it-py==4.3.0
@@ -277,29 +313,43 @@ mlflow-skinny==3.18.0
     # via mlflow
 mlflow-tracing==3.18.0
     # via mlflow
+msgspec==0.22.0
+    # via litestar
 multidict==7.2.1
     # via
     #   aiobotocore
     #   aiohttp
+    #   litestar
     #   yarl
+multipart==2.0.1
+    # via litestar
+mypy-extensions==1.2.0
+    # via typing-inspect
 narwhals==2.29.0
     # via
+    #   formulaic
     #   lightgbm
     #   scikit-learn
 networkx==3.7
     # via dvc
+nltk==3.10.4
+    # via evidently
 numpy==2.5.5
     # via
     #   claim-frequency-mlops
     #   contourpy
+    #   evidently
     #   flaml
+    #   formulaic
     #   lightgbm
     #   matplotlib
     #   mlflow
     #   pandas
+    #   patsy
     #   scikit-learn
     #   scipy
     #   skops
+    #   statsmodels
     #   xgboost
 nvidia-nccl-cu12==2.32.6 ; platform_machine != 'aarch64' and sys_platform == 'linux'
     # via xgboost
@@ -316,6 +366,7 @@ opentelemetry-api==1.45.2
     #   opentelemetry-semantic-conventions
 opentelemetry-proto==1.45.2
     # via
+    #   evidently
     #   mlflow-skinny
     #   mlflow-tracing
 opentelemetry-sdk==1.45.2
@@ -330,25 +381,38 @@ orjson==3.13.0 ; implementation_name == 'cpython'
     #   sqltrie
 packaging==26.3
     # via
+    #   deprecation
     #   dvc
     #   hydra-core
     #   matplotlib
     #   mlflow-skinny
     #   mlflow-tracing
+    #   patsy
+    #   plotly
     #   skops
+    #   statsmodels
 pandas==3.0.6
     # via
     #   claim-frequency-mlops
+    #   evidently
     #   flaml
+    #   formulaic
     #   mlflow
+    #   statsmodels
 pathspec==1.1.1
     # via
     #   dvc
     #   scmrepo
+patsy==1.0.3
+    # via statsmodels
 pillow==13.0.0
     # via matplotlib
 platformdirs==4.14.7
     # via dvc
+plotly==5.24.1
+    # via evidently
+polyfactory==3.5.0
+    # via litestar
 prettytable==3.19.0
     # via skops
 prompt-toolkit==3.0.53
@@ -375,6 +439,7 @@ pyarrow==26.0.1
     # via
     #   claim-frequency-mlops
     #   mlflow
+    #   pandas
 pyasn1==0.6.5
     # via pyasn1-modules
 pyasn1-modules==0.4.2
@@ -384,11 +449,13 @@ pycparser==3.12 ; implementation_name != 'PyPy'
 pydantic==2.14.3
     # via
     #   claim-frequency-mlops
+    #   evidently
     #   fastapi
     #   gto
     #   mlflow-skinny
     #   mlflow-tracing
     #   pydantic-settings
+    #   typer
 pydantic-core==2.50.4
     # via pydantic
 pydantic-settings==2.16.3
@@ -423,6 +490,7 @@ python-dotenv==1.2.4
     # via
     #   mlflow-skinny
     #   pydantic-settings
+    #   uvicorn
 python-multipart==0.0.34
     # via mlflow-skinny
 pywin32==312 ; sys_platform == 'win32'
@@ -432,20 +500,32 @@ pywin32==312 ; sys_platform == 'win32'
 pyyaml==6.0.3
     # via
     #   claim-frequency-mlops
+    #   evidently
+    #   litestar
     #   mlflow-skinny
     #   omegaconf
+    #   uvicorn
+regex==2026.11.25
+    # via nltk
 requests==2.34.2
     # via
     #   databricks-sdk
     #   docker
     #   dvc
     #   dvc-studio-client
+    #   evidently
     #   iterative-telemetry
     #   mlflow-skinny
 rich==15.0.0
     # via
     #   dvc
+    #   evidently
     #   gto
+    #   litestar
+    #   rich-click
+    #   typer
+rich-click==1.9.9
+    # via litestar
 ruamel-yaml==0.19.1
     # via
     #   dvc
@@ -455,16 +535,20 @@ s3fs==2026.9.0
 scikit-learn==1.9.1
     # via
     #   claim-frequency-mlops
+    #   evidently
     #   flaml
     #   mlflow
     #   skops
 scipy==1.18.1
     # via
+    #   evidently
     #   flaml
+    #   formulaic
     #   lightgbm
     #   mlflow
     #   scikit-learn
     #   skops
+    #   statsmodels
     #   xgboost
 scmrepo==3.6.2
     # via
@@ -472,6 +556,8 @@ scmrepo==3.6.2
     #   gto
 semver==3.1.2
     # via gto
+shellingham==1.5.4
+    # via typer
 shortuuid==1.0.13
     # via
     #   dvc
@@ -484,6 +570,8 @@ skops==0.16.0
     # via mlflow
 smmap==5.0.3
     # via gitdb
+sniffio==1.3.1
+    # via litestar
 sqlalchemy==2.1.9
     # via
     #   alembic
@@ -497,10 +585,14 @@ starlette==1.10.0
     # via
     #   fastapi
     #   mlflow-skinny
+statsmodels==0.15.0
+    # via evidently
 tabulate==0.10.0
     # via
     #   dvc
     #   gto
+tenacity==9.2.1
+    # via plotly
 threadpoolctl==3.8.0
     # via scikit-learn
 tomlkit==0.15.2
@@ -510,7 +602,10 @@ tqdm==4.70.1
     #   dvc
     #   dvc-data
     #   fsspec
+    #   nltk
     #   scmrepo
+typer==0.29.3
+    # via evidently
 typing-extensions==4.16.0
     # via
     #   aiohttp
@@ -520,18 +615,24 @@ typing-extensions==4.16.0
     #   asyncssh
     #   click-repl
     #   fastapi
+    #   formulaic
     #   graphene
+    #   litestar
     #   mlflow-skinny
     #   opentelemetry-api
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
+    #   polyfactory
     #   psycopg
     #   pydantic
     #   pydantic-core
     #   pydantic-settings
     #   sqlalchemy
     #   starlette
+    #   typing-inspect
     #   typing-inspection
+typing-inspect==0.9.0
+    # via evidently
 typing-inspection==0.4.5
     # via
     #   fastapi
@@ -539,21 +640,31 @@ typing-inspection==0.4.5
     #   pydantic-settings
 tzdata==2026.6 ; sys_platform == 'emscripten' or sys_platform == 'win32'
     # via
+    #   faker
     #   kombu
     #   pandas
     #   psycopg
     #   tzlocal
 tzlocal==5.4.5
     # via celery
+ujson==6.1.0
+    # via evidently
 urllib3==2.8.0
     # via
     #   botocore
     #   databricks-sdk
     #   docker
     #   dulwich
+    #   evidently
     #   requests
+uuid6==2025.0.1
+    # via evidently
 uvicorn==0.54.0
-    # via mlflow-skinny
+    # via
+    #   evidently
+    #   mlflow-skinny
+uvloop==0.23.0 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'
+    # via uvicorn
 vine==5.1.0
     # via
     #   amqp
@@ -565,16 +676,24 @@ voluptuous==0.16.0
     #   dvc-studio-client
 waitress==3.0.2 ; sys_platform == 'win32'
     # via mlflow
+watchdog==7.1.1
+    # via evidently
+watchfiles==1.3.0
+    # via uvicorn
 wcwidth==0.9.4
     # via
     #   prettytable
     #   prompt-toolkit
+websockets==17.4
+    # via uvicorn
 werkzeug==3.1.9
     # via
     #   flask
     #   flask-cors
 wrapt==2.5.2
-    # via aiobotocore
+    # via
+    #   aiobotocore
+    #   formulaic
 xgboost==2.1.4
     # via flaml
 yarl==1.25.1
