@@ -186,12 +186,21 @@ docker compose --profile airflow down -v    # also deletes the data, for a fresh
 
 Work on a branch per issue and open a PR with `Closes #N`; the [PR template](.github/pull_request_template.md) has the checklist. `main` is protected: CI (lint, format, tests, DAG validation, `requirements.txt` freshness, image builds) must be green to merge. The [dev setup](docs/contracts.md#dev-setup) and each role's [day-1 quickstart](docs/contracts.md#develop-against-fakes) are in the contracts.
 
+## Team and contributions
+
+Each member wrote their own row ([#37](https://github.com/RyanChenJung/claim-frequency-mlops/issues/37)). The roles are defined in the [scope](docs/scope.md#team-and-roles).
+
+| Member | Role | Components | Issues |
+|---|---|---|---|
+| @lx977 | A. Data | `ingest`: OpenML 41214 to the raw parquet, with schema and count checks. `clean` (target caps) and `split` (seeded 70/10/20, stratified on claimants). `make-drift`: the five drift scenarios, with their minimum-effect checks. DVC init and the DagsHub remote, the DVC pipeline and `dvc.lock`. `send-traffic`: replays a split or drift file through the API and writes `ground_truth`. The EDA script (`scripts/eda.py`, `docs/eda/`) and the datasheet (`docs/datasheet.md`). Role A reviews of contract changes (#58, #71) | #8, #9, #10, #11, #12, #19, #29 (PRs #48, #53, #54, #55, #59, #60, #61) |
+| @MarSmallK | B. Modeling | `train`: constant baseline, banded Poisson GLM, LightGBM, and a FLAML AutoML search over four Poisson tree learners, logged as nested MLflow runs with git, data and schema lineage. `register` / `promote`: selection by `val_poisson_deviance`, semver (ADR-0007), `challenger` / `champion` aliases, the champion comparison, and the reference dataset. `evaluate-test` and the generated results table (`docs/results.md`). Architecture diagram, PR template. Slide deck owner | #14, #15, #16, #24, #28, #38 (PRs #43, #47, #49, #50, #51, #52, #73) |
+
 ## AI assistance
 
 The course asks every submission to list its assisting sources, with the product name and version of any AI tool. Each team member lists their own:
 
 - **RyanChenJung (C. Platform)**: Claude Code 2.1.325 to 2.1.330 (Anthropic), with the model Claude Opus 5.5 (`claude-opus-5-5`). Used to draft code, tests, docs, and PR reviews, and to run verification checks. Ryan read and approved each change before it was committed or posted. Commits it helped write carry a `Co-Authored-By: Claude Opus 5.5` trailer.
-- **lx977 (A. Data)**: to be added.
+- **lx977 (A. Data)**: Claude desktop app 7.37095.0 (Anthropic) in Cowork mode, with the model Claude Opus 5.5 (`claude-opus-5-5`), in several chats. Used to draft code, tests, docs, PR descriptions, and review replies, to check plans and reviews against the code, and to run checks in a sandbox. lx977 ran every command, read each change, and made every commit, push, and merge herself.
 - **MarSmallK (B. Modeling)**: to be added.
 - **cyq01 (D. Serving and monitoring)**: to be added.
 
