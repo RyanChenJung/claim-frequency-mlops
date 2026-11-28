@@ -3,6 +3,10 @@
 The API calls ``load_champion`` at startup. It returns the model and the ``ModelInfoResponse``
 that ``/model-info`` serves. ``build_model_info`` turns the registry data into that response,
 and needs no MLflow server, so it is easy to test.
+
+The API refuses a champion whose ``schema_hash`` tag differs from the code's ``schema_hash()``
+(docs/contracts.md, API). Such a model was trained on other features, so its predictions
+would be wrong. ``check_schema_hash`` runs before the model is downloaded.
 """
 
 import math
@@ -20,9 +24,28 @@ from claimfreq.contracts.model import (
     TAG_SEMVER,
     FrequencyModel,
 )
+from claimfreq.contracts.schema import schema_hash
 
 # The model version tags that /model-info needs. register (Role B) sets all of them.
 REQUIRED_TAGS = (TAG_SEMVER, TAG_SCHEMA_HASH, TAG_DATA_HASH, TAG_GIT_COMMIT, TAG_ALGORITHM)
+
+
+class SchemaMismatchError(ValueError):
+    """The champion was trained with a different feature schema than the app's code."""
+
+
+def check_schema_hash(version: str, tags: Mapping[str, str]) -> None:
+    """Raise ``SchemaMismatchError`` if the version's ``schema_hash`` tag differs from the code's.
+
+    A missing tag is left to ``build_model_info``, which names every missing tag.
+    """
+    tagged = tags.get(TAG_SCHEMA_HASH)
+    expected = schema_hash()
+    if tagged is not None and tagged != expected:
+        raise SchemaMismatchError(
+            f"model version {version} has schema_hash {tagged}, but the code's is {expected}. "
+            "Promote a version trained with this code's schema"
+        )
 
 
 def build_model_info(
@@ -68,7 +91,9 @@ def build_model_info(
 def load_champion(tracking_uri: str) -> tuple[FrequencyModel, ModelInfoResponse]:
     """Load ``claim-frequency@champion`` from MLflow, with its ``/model-info`` body.
 
-    Raises any MLflow error, for example when no champion exists yet. The caller retries.
+    Raises any MLflow error, for example when no champion exists yet, and
+    ``SchemaMismatchError`` when the champion's ``schema_hash`` differs from the code's. The
+    caller retries.
     """
     # Imported here, because MLflow is slow to import and tests with an injected model skip it.
     import mlflow
@@ -77,6 +102,8 @@ def load_champion(tracking_uri: str) -> tuple[FrequencyModel, ModelInfoResponse]
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient(tracking_uri=tracking_uri)
     model_version = client.get_model_version_by_alias(REGISTERED_MODEL_NAME, ALIAS_CHAMPION)
+    # Before the download, so a wrong champion costs no time.
+    check_schema_hash(str(model_version.version), model_version.tags)
     run = client.get_run(model_version.run_id)
     # Load by version number, not by alias, so the model always matches the tags read above,
     # even if someone moves the alias between the two calls.
