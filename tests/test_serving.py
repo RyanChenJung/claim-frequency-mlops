@@ -5,6 +5,7 @@ import math
 import threading
 import time
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import httpx
 import numpy as np
@@ -28,11 +29,12 @@ from claimfreq.contracts.logs import (
     prediction_log,
     rejected_request_log,
 )
-from claimfreq.contracts.schema import FEATURE_COLUMNS
+from claimfreq.contracts.schema import FEATURE_COLUMNS, schema_hash
 from claimfreq.fakes import TrueFrequencyModel, make_predict_request, true_frequency
 from claimfreq.serving import app as app_module
+from claimfreq.serving import champion as champion_module
 from claimfreq.serving.app import create_app
-from claimfreq.serving.champion import build_model_info
+from claimfreq.serving.champion import SchemaMismatchError, build_model_info, check_schema_hash
 
 TAGS = {
     "semver": "1.2.0",
@@ -349,3 +351,56 @@ def test_build_model_info_names_missing_tags():
     tags = {key: value for key, value in TAGS.items() if key != "semver"}
     with pytest.raises(ValueError, match="semver"):
         build_model_info("3", tags, "run123", 0, {})
+
+
+# --- Schema check -------------------------------------------------------------------------------
+
+OTHER_HASH = "000000000000"
+
+
+def test_check_schema_hash_accepts_the_codes_hash():
+    check_schema_hash("3", {**TAGS, "schema_hash": schema_hash()})
+
+
+def test_check_schema_hash_refuses_another_hash_and_names_both():
+    with pytest.raises(SchemaMismatchError, match=f"{OTHER_HASH}.*{schema_hash()}"):
+        check_schema_hash("3", {**TAGS, "schema_hash": OTHER_HASH})
+
+
+def test_check_schema_hash_leaves_a_missing_tag_to_build_model_info():
+    check_schema_hash("3", {key: value for key, value in TAGS.items() if key != "schema_hash"})
+
+
+def test_load_champion_refuses_a_mismatch_before_downloading_the_model(monkeypatch):
+    import mlflow
+
+    class FakeClient:
+        def __init__(self, tracking_uri):
+            pass
+
+        def get_model_version_by_alias(self, name, alias):
+            return SimpleNamespace(
+                version="3", run_id="run3", tags={**TAGS, "schema_hash": OTHER_HASH}
+            )
+
+    downloads = []
+    monkeypatch.setattr(mlflow, "MlflowClient", FakeClient)
+    monkeypatch.setattr(mlflow.pyfunc, "load_model", lambda uri: downloads.append(uri))
+    with pytest.raises(SchemaMismatchError):
+        champion_module.load_champion("http://mlflow.invalid")
+    assert downloads == []
+
+
+def test_a_mismatched_champion_keeps_the_app_503_and_logs_why(db_url, monkeypatch, caplog):
+    monkeypatch.setattr(app_module, "CHAMPION_RETRY_SECONDS", 0.01)
+    attempts = threading.Event()
+
+    def load_mismatched(_tracking_uri):
+        attempts.set()
+        check_schema_hash("3", {**TAGS, "schema_hash": OTHER_HASH})
+
+    monkeypatch.setattr(app_module, "load_champion", load_mismatched)
+    with caplog.at_level("WARNING", logger="claimfreq"), TestClient(create_app()) as client:
+        assert attempts.wait(timeout=5)
+        assert client.get(PATH_HEALTH).status_code == 503
+    assert any(f"schema_hash {OTHER_HASH}" in record.getMessage() for record in caplog.records)
