@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from sqlalchemy import insert
+from test_publish import FakeWorkspace
 
 from claimfreq import make_drift
 from claimfreq.cli import EXIT_CHECK_FAILED, EXIT_OK, main
@@ -34,6 +35,7 @@ from claimfreq.contracts.schema import (
     coerce_features,
 )
 from claimfreq.fakes import TrueFrequencyModel, make_policies, make_reference_frame
+from claimfreq.monitoring import publish
 from claimfreq.monitoring import reference as reference_module
 from claimfreq.monitoring.checks import (
     CALIBRATION,
@@ -272,6 +274,9 @@ def cli_db(tmp_path, monkeypatch, reference):
         return reference, "7"
 
     monkeypatch.setattr(reference_module, "load_reference", fake_load_reference)
+    # No Evidently UI in unit tests: tests/test_publish.py covers the push.
+    monkeypatch.setattr(publish, "_workspace", lambda url: FakeWorkspace())
+    monkeypatch.delenv(env.ALERT_WEBHOOK_URL, raising=False)
     engine = make_engine(url)
     create_all(engine)
     yield engine, calls

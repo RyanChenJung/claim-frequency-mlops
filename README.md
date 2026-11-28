@@ -87,9 +87,11 @@ Teammates with DagsHub access can instead fetch the versioned data with `uv run 
 docker compose up -d                            # postgres and mlflow
 docker compose --profile tools build trainer    # the image every pipeline step runs in
 docker compose --profile airflow up -d          # adds Airflow
+docker compose up -d evidently-ui               # the Evidently UI, which monitor pushes to
 ```
 
 - MLflow: <http://localhost:5001>.
+- Evidently: <http://localhost:8001>. Start it before `monitor` runs: when `monitor` cannot push its snapshot, it exits 1, even if every check passed.
 - Airflow: <http://localhost:8080>, with no login. It is only reachable from this machine.
 - Both DAGs start paused, and a paused DAG runs nothing: a manual trigger just waits in the queue. Unpause them once:
 
@@ -168,8 +170,8 @@ Otherwise the scheduled run at the next full hour checks these batches again, po
 ### 10. Stop
 
 ```bash
-docker compose --profile airflow down       # keeps the data in Docker volumes
-docker compose --profile airflow down -v    # also deletes the data, for a fresh start
+docker compose --profile airflow --profile monitoring down       # keeps the data in Docker volumes
+docker compose --profile airflow --profile monitoring down -v    # also deletes the data, for a fresh start
 ```
 
 ### Troubleshooting
@@ -178,7 +180,7 @@ docker compose --profile airflow down -v    # also deletes the data, for a fresh
 - **`Set AIRFLOW_FERNET_KEY, AIRFLOW_JWT_SECRET, and HOST_REPO_DIR in .env`**: `airflow-init` checks these before Airflow starts. See step 2.
 - **Port 5000 is taken on macOS**: that is the AirPlay Receiver, which is why MLflow is published on 5001.
 - **uv `required-version` error**: run `uv self update`.
-- **`password authentication failed` in `docker compose logs mlflow` after you change `POSTGRES_PASSWORD`**: Postgres sets the password only on the first start of an empty volume. Put the old value back, or start fresh with `docker compose --profile airflow down -v`. That deletes every MLflow run and model version, the Airflow history, and the prediction logs, but not `data/`.
+- **`password authentication failed` in `docker compose logs mlflow` after you change `POSTGRES_PASSWORD`**: Postgres sets the password only on the first start of an empty volume. Put the old value back, or start fresh with `docker compose --profile airflow --profile monitoring down -v`. That deletes every MLflow run and model version, the Airflow history, and the prediction logs, but not `data/`.
 - **Airflow tasks fail with `permission denied` on `/var/run/docker.sock` (Linux)**: the socket belongs to the `docker` group. Add that group id to `airflow-scheduler` with `group_add` in `docker-compose.yml`.
 - **A task fails with exit code 3**: that command is still a stub, and the message names the role that owns it. Exit 10 means a check failed, and exit 1 an unexpected error ([contracts: exit codes](docs/contracts.md#cli--clipy)). Exit 124 means a `monitor` run hung until its 30-minute `timeout` ended it, for example on an Evidently UI that never answered. When it hangs in the Evidently push, the checks have already run: their lines are in the task log above the hang, but a failed check then sends no alert and triggers no retraining. Trigger `monitor` again once the UI answers.
 

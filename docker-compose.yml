@@ -4,6 +4,8 @@
 #   cp .env.example .env              # then fill in the required values
 #   docker compose up -d              # postgres and mlflow: enough for development
 #   open http://localhost:5001        # MLflow UI (5000 is macOS AirPlay)
+#   docker compose up -d evidently-ui # Evidently UI, in the "monitoring" profile
+#   open http://localhost:8001        # Evidently UI
 #
 # Airflow runs only on the demo machine, in the "airflow" profile (it also needs the Airflow
 # keys in .env):
@@ -106,6 +108,27 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # Monitoring dashboard (Role D; docs/contracts.md, Images). `claimfreq monitor` pushes one
+  # Evidently snapshot per run to it, as http://evidently-ui:8000 inside compose. The image
+  # version must equal evidently in uv.lock. Published on 8001, because the API uses 8000.
+  # The "monitoring" profile keeps a plain `docker compose up` from starting it. Naming the
+  # service turns the profile on, so `docker compose up -d evidently-ui` needs no --profile.
+  evidently-ui:
+    profiles: ["monitoring"]
+    image: evidently/evidently-service:0.7.23
+    ports:
+      - "127.0.0.1:8001:8000"
+    volumes:
+      # The image runs `evidently ui` in /app, which keeps its projects in /app/workspace.
+      - evidently-workspace:/app/workspace
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/version')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
   # One-shot tool, not a long-running service: the "tools" profile keeps `docker compose up`
   # from starting it. Run a command with:
   #   docker compose run --rm trainer claimfreq <command>
@@ -204,3 +227,4 @@ volumes:
   postgres-data:
   mlflow-artifacts:
   airflow-logs:
+  evidently-workspace:

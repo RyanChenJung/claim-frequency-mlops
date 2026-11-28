@@ -10,7 +10,8 @@ Exit codes (any nonzero code makes Airflow mark the task failed):
 
 - ``0`` OK.
 - ``1`` unexpected error: any unhandled exception. ``main`` prints the traceback to stderr;
-  Python's own default for a crash is also 1.
+  Python's own default for a crash is also 1; also ``monitor`` when every check that ran
+  passed but the Evidently snapshot could not be pushed (no traceback).
 - ``2`` usage error (argparse's default for bad arguments).
 - ``3`` not implemented yet.
 - ``10`` a check failed (data validation or a monitoring test), kept distinct from a crash.
@@ -51,8 +52,9 @@ MONITOR_SEMANTICS = (
     "with at least monitor.min_predictions predictions; otherwise they are reported as "
     "'skipped (too few predictions)'. Calibration and live deviance run only on the "
     "predictions that have ground truth; with none, they are reported as 'skipped (no ground "
-    "truth yet)'. A skipped check never fails the run: exit 10 if any check that ran failed, "
-    "else 0."
+    "truth yet)'. A skipped check never fails the run: exit 10 if any check that ran failed; "
+    "otherwise exit 1 if the Evidently push failed, else 0. No snapshot is pushed when the "
+    "drift checks are skipped."
 )
 
 
@@ -135,12 +137,15 @@ def _train(args: argparse.Namespace) -> int:
 
 
 def _monitor(args: argparse.Namespace) -> int:
-    """Run the five checks on one window of the logs; exit 10 if any check that ran failed."""
+    """Run the five checks on one window of the logs; exit 10 if any check that ran failed.
+
+    Otherwise exit 1 if the Evidently push failed, else 0.
+    """
     # Imported here so `--help` and the stubs stay fast and need no pandas or Evidently.
     from claimfreq.contracts import env
     from claimfreq.contracts.logs import create_all, make_engine
     from claimfreq.contracts.params import load_params
-    from claimfreq.monitoring import reference
+    from claimfreq.monitoring import publish, reference
     from claimfreq.monitoring.checks import run_checks
     from claimfreq.monitoring.window import Window, load_window
 
@@ -165,11 +170,38 @@ def _monitor(args: argparse.Namespace) -> int:
     report = run_checks(data, reference_frame, params)
     for check in report.checks:
         print(f"monitor: {check.line()}")
+
+    # Publishing must not hide a failed check, so its errors are collected, not raised.
+    publish_errors = []
+    if report.snapshot is None:
+        print("monitor: no Evidently snapshot, because the drift checks were skipped")
+    else:
+        try:
+            publish.push_snapshot(env.get(env.EVIDENTLY_UI_URL), report.snapshot, window)
+            print(f"monitor: pushed the snapshot to project {publish.EVIDENTLY_PROJECT!r}")
+        except Exception as error:
+            publish_errors.append(f"could not push the snapshot: {type(error).__name__}: {error}")
+
     if report.failed:
         names = ", ".join(check.name for check in report.failed)
         print(f"monitor: failed checks: {names}", file=sys.stderr)
+        webhook_url = env.get(env.ALERT_WEBHOOK_URL)
+        if webhook_url:
+            try:
+                publish.send_alert(webhook_url, publish.alert_message(report.failed, window))
+                print("monitor: sent the alert to ALERT_WEBHOOK_URL")
+            except Exception as error:
+                # The URL is a secret, so the message names the variable, never its value.
+                publish_errors.append(f"could not send the alert: {type(error).__name__}")
+        else:
+            print("monitor: ALERT_WEBHOOK_URL is not set, so the alert goes to this log only")
+
+    for message in publish_errors:
+        print(f"monitor: {message}", file=sys.stderr)
+    if report.failed:
+        # A failed check wins over a publishing error, so retraining still triggers.
         return EXIT_CHECK_FAILED
-    return EXIT_OK
+    return EXIT_ERROR if publish_errors else EXIT_OK
 
 
 def _registry_command(action: Callable[[], str]) -> int:
